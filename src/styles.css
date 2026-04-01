@@ -3,7 +3,6 @@
 :root {
   --bg: #0a0b10;
   --panel: #111219;
-  --panel-2: #151721;
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.14);
   --text: #f3f4f7;
@@ -130,9 +129,10 @@ button {
 .sidebar-primary,
 .chip-button,
 .primary-button,
-.ghost-button {
+.ghost-button,
+.choice-card,
+.upload-card {
   min-height: 40px;
-  padding: 0 14px;
   border-radius: 12px;
   border: 1px solid transparent;
   color: var(--text);
@@ -145,6 +145,7 @@ button {
 .sidebar-link,
 .ghost-button,
 .chip-button {
+  padding: 0 14px;
   background: transparent;
   border-color: transparent;
   text-align: left;
@@ -160,8 +161,8 @@ button {
 .primary-button:focus-visible,
 .ghost-button:hover,
 .ghost-button:focus-visible,
-.capability-card:hover,
-.capability-card:focus-visible,
+.choice-card:hover,
+.choice-card:focus-visible,
 .upload-card:hover,
 .upload-card:focus-visible {
   transform: translateY(-1px);
@@ -183,6 +184,7 @@ button {
 
 .sidebar-primary,
 .primary-button {
+  padding: 0 14px;
   background: var(--accent);
   color: #f7f5ff;
   font-weight: 700;
@@ -310,7 +312,10 @@ button {
 .empty-state strong,
 .empty-state span,
 .table__row span,
-.file-row span {
+.file-row span,
+.choice-card span,
+.upload-card__label,
+.upload-card__meta {
   color: var(--muted);
 }
 
@@ -377,7 +382,7 @@ button {
 
 .stepper {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -425,7 +430,18 @@ button {
   min-height: 340px;
 }
 
-.capability-card,
+.option-grid,
+.file-columns,
+.review-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.option-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.choice-card,
 .upload-card {
   display: flex;
   align-items: center;
@@ -433,50 +449,38 @@ button {
   gap: 12px;
   width: 100%;
   padding: 18px;
-  border: 1px solid var(--border-strong);
-  border-radius: 16px;
   background: rgba(255, 255, 255, 0.02);
-  color: var(--text);
+  border-color: var(--border-strong);
   text-align: left;
 }
 
-.capability-card strong,
+.choice-card strong,
 .upload-card strong {
   display: block;
   margin-bottom: 4px;
 }
 
-.capability-card span,
-.upload-card__label,
-.upload-card__meta {
-  color: var(--muted);
-}
-
-.capability-card--active {
+.choice-card--active {
   border-color: rgba(124, 92, 255, 0.32);
   background: var(--accent-soft);
 }
 
-.capability-card__dot {
+.choice-card__dot {
   width: 12px;
   height: 12px;
   border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.choice-card--active .choice-card__dot {
   background: var(--accent);
 }
 
-.upload-grid,
-.file-columns,
-.review-grid {
-  display: grid;
-  gap: 14px;
+.upload-card--full {
+  grid-column: 1 / -1;
 }
 
-.upload-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.file-columns,
-.review-grid {
+.file-columns {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -502,9 +506,13 @@ button {
   color: var(--muted);
 }
 
+.form-grid,
+.review-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -541,6 +549,7 @@ button {
 }
 
 .chip-button {
+  padding: 0 14px;
   border-color: var(--border);
   background: rgba(255, 255, 255, 0.02);
 }
@@ -548,10 +557,6 @@ button {
 .chip-button--active {
   border-color: rgba(124, 92, 255, 0.34);
   background: var(--accent-soft);
-}
-
-.review-grid {
-  margin-top: 4px;
 }
 
 .wizard-actions {
@@ -571,6 +576,10 @@ button {
 }
 
 .metric-row + .metric-row {
+  margin-top: 14px;
+}
+
+.metric-row--single {
   margin-top: 14px;
 }
 
@@ -622,7 +631,11 @@ button {
   line-height: 1.5;
 }
 
-@media (max-width: 1100px) {
+.issue-item--neutral {
+  margin-top: 14px;
+}
+
+@media (max-width: 1200px) {
   .app-shell {
     grid-template-columns: 1fr;
   }
@@ -634,7 +647,7 @@ button {
 
   .card-grid,
   .content-grid,
-  .upload-grid,
+  .option-grid,
   .file-columns,
   .review-grid,
   .form-grid,

@@ -3,9 +3,10 @@ import { defaultCapabilityForm } from "./data/mockData";
 import type { RiskLevel } from "./types";
 
 type ViewId = "home" | "new-evaluation" | "results";
-type StepId = 1 | 2 | 3 | 4;
+type StepId = 1 | 2 | 3 | 4 | 5 | 6;
 type Decision = "Ready" | "Conditional" | "Not Ready";
 type Tone = "good" | "warn" | "bad";
+type OutputSource = "platform-model" | "uploaded-outputs";
 
 type UploadItem = {
   name: string;
@@ -15,24 +16,36 @@ type UploadItem = {
 
 type EvaluationDraft = {
   capability: "Document summarisation";
+  outputSource: OutputSource | null;
   documents: UploadItem[];
-  sources: UploadItem[];
+  referenceOutputs: UploadItem[];
+  policyFiles: UploadItem[];
+  aiOutputs: UploadItem[];
   audience: string;
   outputStyle: string;
   maxWords: number;
   riskLevel: RiskLevel;
+  modelId: string;
+  promptPreset: string;
+  providedLatencySeconds: string;
+  providedCostPerDocument: string;
 };
 
 type EvaluationRecord = {
   id: number;
   createdAt: string;
   capability: string;
+  outputSource: OutputSource;
   documentCount: number;
-  sourceCount: number;
+  referenceCount: number;
+  policyCount: number;
+  outputCount: number;
   audience: string;
   outputStyle: string;
   maxWords: number;
   riskLevel: RiskLevel;
+  modelId: string | null;
+  promptPreset: string | null;
   readinessScore: number;
   decision: Decision;
   metrics: {
@@ -40,37 +53,60 @@ type EvaluationRecord = {
     coverage: number;
     compliance: number;
     privacy: number;
-    latency: number;
+    latency: number | null;
   };
+  costPerDocument: number | null;
   issues: string[];
   documents: UploadItem[];
-  sources: UploadItem[];
+  referenceOutputs: UploadItem[];
+  policyFiles: UploadItem[];
+  aiOutputs: UploadItem[];
 };
 
 const thresholds = defaultCapabilityForm.thresholds;
 
+const modelProfiles: Record<
+  string,
+  { quality: number; latency: number; costPerDocument: number }
+> = {
+  "GPT-4.1 Mini": { quality: 1.2, latency: 2.4, costPerDocument: 0.014 },
+  "GPT-4.1": { quality: 3.1, latency: 3.1, costPerDocument: 0.032 },
+  "Claude 3.7 Sonnet": { quality: 2.7, latency: 3.6, costPerDocument: 0.029 },
+};
+
 const stepItems: Array<{ id: StepId; label: string }> = [
   { id: 1, label: "Capability" },
-  { id: 2, label: "Uploads" },
-  { id: 3, label: "Setup" },
-  { id: 4, label: "Review" },
+  { id: 2, label: "Output" },
+  { id: 3, label: "Documents" },
+  { id: 4, label: "Truth Pack" },
+  { id: 5, label: "Configure" },
+  { id: 6, label: "Review" },
 ];
 
 const initialDraft = (): EvaluationDraft => ({
   capability: "Document summarisation",
+  outputSource: null,
   documents: [],
-  sources: [],
+  referenceOutputs: [],
+  policyFiles: [],
+  aiOutputs: [],
   audience: "",
   outputStyle: defaultCapabilityForm.summaryStyle,
   maxWords: defaultCapabilityForm.outputLength,
   riskLevel: defaultCapabilityForm.riskLevel,
+  modelId: "GPT-4.1 Mini",
+  promptPreset: "Balanced",
+  providedLatencySeconds: "",
+  providedCostPerDocument: "",
 });
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
 const hashSeed = (value: string) =>
-  value.split("").reduce((total, char) => (total * 31 + char.charCodeAt(0)) % 10007, 7);
+  value
+    .split("")
+    .reduce((total, char) => (total * 31 + char.charCodeAt(0)) % 10007, 7);
 
 const jitter = (seed: string, salt: number) =>
   (((hashSeed(`${seed}-${salt}`) % 1000) / 1000) - 0.5) * 3;
@@ -89,7 +125,17 @@ const toUploadItems = (files: FileList | null): UploadItem[] =>
       }))
     : [];
 
+const parseOptionalNumber = (value: string) => {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
 const formatPercent = (value: number) => `${value.toFixed(1)}%`;
+const formatCurrency = (value: number | null) =>
+  value === null ? "Not provided" : `$${value.toFixed(3)}`;
+const formatLatency = (value: number | null) =>
+  value === null ? "Not provided" : `${value.toFixed(1)}s`;
 
 const getTone = (decision: Decision): Tone => {
   if (decision === "Ready") {
@@ -98,6 +144,7 @@ const getTone = (decision: Decision): Tone => {
   if (decision === "Conditional") {
     return "warn";
   }
+
   return "bad";
 };
 
@@ -107,101 +154,163 @@ const simulateEvaluation = (
 ): EvaluationRecord => {
   const seed = [
     draft.capability,
+    draft.outputSource,
     draft.documents.map((document) => document.name).join("|"),
-    draft.sources.map((source) => source.name).join("|"),
+    draft.referenceOutputs.map((file) => file.name).join("|"),
+    draft.policyFiles.map((file) => file.name).join("|"),
+    draft.aiOutputs.map((file) => file.name).join("|"),
     draft.audience,
     draft.outputStyle,
     draft.maxWords,
     draft.riskLevel,
+    draft.modelId,
+    draft.promptPreset,
     evaluationIndex,
   ].join("-");
-  const docBoost = Math.min(draft.documents.length * 2.5, 10);
-  const sourceBoost = Math.min(draft.sources.length * 3.2, 9.6);
+
+  const docBoost = Math.min(draft.documents.length * 2.4, 10);
+  const referenceBoost = Math.min(draft.referenceOutputs.length * 3.1, 9.3);
+  const policyBoost = Math.min(draft.policyFiles.length * 1.8, 4.5);
+  const outputCoverageRatio =
+    draft.outputSource === "uploaded-outputs"
+      ? Math.min(1, draft.aiOutputs.length / Math.max(1, draft.documents.length))
+      : 1;
   const riskPenalty =
-    draft.riskLevel === "High" ? 4.4 : draft.riskLevel === "Medium" ? 2.2 : 0;
+    draft.riskLevel === "High" ? 4.6 : draft.riskLevel === "Medium" ? 2.1 : 0;
   const styleBoost =
     draft.outputStyle === "Board-ready briefing"
-      ? 2.7
+      ? 2.8
       : draft.outputStyle === "Executive brief"
         ? 2.4
         : draft.outputStyle === "Structured bullet summary"
           ? 2.1
-          : 1.6;
-  const audienceBoost = draft.audience.trim() ? 0.9 : 0;
+          : 1.5;
+  const audienceBoost = draft.audience.trim() ? 1.1 : 0;
+  const modelProfile =
+    draft.outputSource === "platform-model"
+      ? modelProfiles[draft.modelId]
+      : null;
+  const promptBoost =
+    draft.promptPreset === "Strict"
+      ? 1.8
+      : draft.promptPreset === "Evidence-led"
+        ? 1.4
+        : 0.8;
 
   const faithfulness = clamp(
-    83 + docBoost * 0.45 + sourceBoost * 1.05 - riskPenalty * 0.38 + jitter(seed, 1),
+    81 +
+      docBoost * 0.45 +
+      referenceBoost * 1.05 +
+      policyBoost * 0.35 +
+      (modelProfile?.quality ?? 1.6) +
+      outputCoverageRatio * 2.6 -
+      riskPenalty * 0.32 +
+      jitter(seed, 1),
     70,
     99,
   );
+
   const coverage = clamp(
-    81 +
-      docBoost * 1.05 +
-      sourceBoost * 0.42 -
-      (draft.maxWords < 140 ? 4.5 : 0) +
+    79 +
+      docBoost * 0.88 +
+      referenceBoost * 0.52 +
+      outputCoverageRatio * 6 -
+      (draft.maxWords < 140 ? 4.2 : 0) +
       jitter(seed, 2),
     68,
     99,
   );
+
   const compliance = clamp(
-    86 + styleBoost * 1.15 + audienceBoost - riskPenalty * 0.16 + jitter(seed, 3),
+    84 +
+      styleBoost * 1.05 +
+      policyBoost * 0.72 +
+      promptBoost +
+      audienceBoost -
+      riskPenalty * 0.15 +
+      jitter(seed, 3),
     70,
     99,
   );
+
   const privacy = clamp(
-    89 + sourceBoost * 0.95 - riskPenalty * 0.58 + jitter(seed, 4),
+    87 +
+      referenceBoost * 0.35 +
+      policyBoost * 1.15 +
+      (modelProfile?.quality ?? 1.6) * 0.4 -
+      riskPenalty * 0.48 +
+      jitter(seed, 4),
     75,
     99,
   );
-  const latency = clamp(
-    1.8 +
-      draft.documents.length * 0.55 +
-      draft.sources.length * 0.2 +
-      (draft.maxWords > 250 ? 0.35 : 0) +
-      Math.max(0, draft.documents.length - 3) * 0.1,
-    1.8,
-    7.8,
-  );
+
+  const providedLatency = parseOptionalNumber(draft.providedLatencySeconds);
+  const latency =
+    draft.outputSource === "platform-model"
+      ? clamp(
+          (modelProfile?.latency ?? 2.8) +
+            draft.documents.length * 0.52 +
+            draft.referenceOutputs.length * 0.12 +
+            (draft.maxWords > 260 ? 0.4 : 0),
+          1.8,
+          8.2,
+        )
+      : providedLatency;
+
+  const costPerDocument =
+    draft.outputSource === "platform-model"
+      ? Number(
+          (
+            (modelProfile?.costPerDocument ?? 0.02) *
+            (1 + draft.documents.length * 0.06)
+          ).toFixed(3),
+        )
+      : parseOptionalNumber(draft.providedCostPerDocument);
+
   const readinessScore =
-    faithfulness * 0.3 +
+    faithfulness * 0.31 +
     coverage * 0.25 +
     compliance * 0.2 +
-    privacy * 0.2 +
-    Math.max(0, 100 - latency * 10) * 0.05;
+    privacy * 0.19 +
+    (latency === null ? 82 : Math.max(0, 100 - latency * 10)) * 0.05;
 
   const issues: string[] = [];
 
   if (faithfulness < thresholds.faithfulness) {
-    issues.push("Add stronger source-of-truth references.");
+    issues.push("Strengthen alignment against the source of truth.");
   }
   if (coverage < thresholds.coverage) {
-    issues.push("Increase document coverage or widen the batch.");
+    issues.push("Increase document coverage or reduce output compression.");
   }
   if (compliance < thresholds.compliance) {
-    issues.push("Tighten the output format and summary instructions.");
+    issues.push("Tighten the output instructions and response format.");
   }
   if (privacy < thresholds.privacy) {
-    issues.push("Improve protection against sensitive content leakage.");
+    issues.push("Add stronger handling for sensitive enterprise content.");
   }
-  if (latency > thresholds.maxLatencySeconds) {
-    issues.push("Reduce batch size or shorten the output length.");
+  if (draft.referenceOutputs.length < 1) {
+    issues.push("Upload at least one reference output.");
   }
-  if (draft.documents.length < 2) {
-    issues.push("Use more than one document for a stronger evaluation pack.");
-  }
-  if (draft.sources.length < 2) {
-    issues.push("Upload at least two source-of-truth files if available.");
-  }
-
-  let decision: Decision = "Not Ready";
-
   if (
+    draft.outputSource === "uploaded-outputs" &&
+    draft.aiOutputs.length !== draft.documents.length
+  ) {
+    issues.push("Match one uploaded AI output to each source document.");
+  }
+  if (latency !== null && latency > thresholds.maxLatencySeconds) {
+    issues.push("Latency is above the current operational threshold.");
+  }
+
+  const qualityPass =
     faithfulness >= thresholds.faithfulness &&
     coverage >= thresholds.coverage &&
     compliance >= thresholds.compliance &&
-    privacy >= thresholds.privacy &&
-    latency <= thresholds.maxLatencySeconds
-  ) {
+    privacy >= thresholds.privacy;
+  const latencyPass = latency === null || latency <= thresholds.maxLatencySeconds;
+
+  let decision: Decision = "Not Ready";
+
+  if (qualityPass && latencyPass) {
     decision = "Ready";
   } else if (issues.length <= 3 && privacy >= thresholds.privacy - 2) {
     decision = "Conditional";
@@ -211,12 +320,21 @@ const simulateEvaluation = (
     id: evaluationIndex,
     createdAt: new Date().toISOString(),
     capability: draft.capability,
+    outputSource: draft.outputSource ?? "platform-model",
     documentCount: draft.documents.length,
-    sourceCount: draft.sources.length,
+    referenceCount: draft.referenceOutputs.length,
+    policyCount: draft.policyFiles.length,
+    outputCount:
+      draft.outputSource === "uploaded-outputs"
+        ? draft.aiOutputs.length
+        : draft.documents.length,
     audience: draft.audience,
     outputStyle: draft.outputStyle,
     maxWords: draft.maxWords,
     riskLevel: draft.riskLevel,
+    modelId: draft.outputSource === "platform-model" ? draft.modelId : null,
+    promptPreset:
+      draft.outputSource === "platform-model" ? draft.promptPreset : null,
     readinessScore,
     decision,
     metrics: {
@@ -226,9 +344,12 @@ const simulateEvaluation = (
       privacy,
       latency,
     },
+    costPerDocument,
     issues: issues.slice(0, 4),
     documents: draft.documents,
-    sources: draft.sources,
+    referenceOutputs: draft.referenceOutputs,
+    policyFiles: draft.policyFiles,
+    aiOutputs: draft.aiOutputs,
   };
 };
 
@@ -268,38 +389,39 @@ const MetricRail = ({
   <div className="metric-row">
     <div className="metric-row__meta">
       <span>{label}</span>
-      <strong>{label === "Latency" ? `${value.toFixed(1)}s` : formatPercent(value)}</strong>
+      <strong>{formatPercent(value)}</strong>
     </div>
     <div className="metric-row__bar">
       <span
         className={`metric-row__fill ${
-          label === "Latency"
-            ? value <= target
-              ? "metric-row__fill--good"
-              : "metric-row__fill--bad"
-            : value >= target
-              ? "metric-row__fill--good"
-              : "metric-row__fill--bad"
+          value >= target ? "metric-row__fill--good" : "metric-row__fill--bad"
         }`}
-        style={{
-          width: `${
-            label === "Latency"
-              ? Math.min(100, (value / 8) * 100)
-              : Math.min(100, value)
-          }%`,
-        }}
+        style={{ width: `${Math.min(100, value)}%` }}
       />
-      <span
-        className="metric-row__target"
-        style={{
-          left: `${
-            label === "Latency"
-              ? Math.min(100, (target / 8) * 100)
-              : Math.min(100, target)
-          }%`,
-        }}
-      />
+      <span className="metric-row__target" style={{ left: `${target}%` }} />
     </div>
+  </div>
+);
+
+const FileListColumn = ({
+  label,
+  files,
+}: {
+  label: string;
+  files: UploadItem[];
+}) => (
+  <div className="file-column">
+    <span className="panel-label">{label}</span>
+    {files.length > 0 ? (
+      files.map((file) => (
+        <div key={`${label}-${file.name}`} className="file-row">
+          <span>{file.name}</span>
+          <span>{file.sizeLabel}</span>
+        </div>
+      ))
+    ) : (
+      <div className="file-row file-row--empty">No files</div>
+    )}
   </div>
 );
 
@@ -318,10 +440,28 @@ function App() {
     step === 1
       ? Boolean(draft.capability)
       : step === 2
-        ? draft.documents.length > 0 && draft.sources.length > 0
+        ? draft.outputSource !== null
         : step === 3
-          ? draft.audience.trim().length > 0 && draft.maxWords > 0
-          : true;
+          ? draft.documents.length > 0
+          : step === 4
+            ? draft.referenceOutputs.length > 0
+            : step === 5
+              ? draft.audience.trim().length > 0 &&
+                draft.maxWords > 0 &&
+                (draft.outputSource === "platform-model"
+                  ? draft.modelId.trim().length > 0
+                  : draft.aiOutputs.length > 0)
+              : true;
+
+  const updateDraft = <Key extends keyof EvaluationDraft>(
+    key: Key,
+    value: EvaluationDraft[Key],
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
 
   const openNewEvaluation = () => {
     setDraft(initialDraft());
@@ -330,22 +470,14 @@ function App() {
   };
 
   const goNext = () => {
-    if (step === 1) {
-      setStep(2);
-    } else if (step === 2) {
-      setStep(3);
-    } else if (step === 3) {
-      setStep(4);
+    if (step < 6) {
+      setStep((current) => (current + 1) as StepId);
     }
   };
 
   const goBack = () => {
-    if (step === 4) {
-      setStep(3);
-    } else if (step === 3) {
-      setStep(2);
-    } else if (step === 2) {
-      setStep(1);
+    if (step > 1) {
+      setStep((current) => (current - 1) as StepId);
     }
   };
 
@@ -372,6 +504,11 @@ function App() {
           meta="Runs completed"
         />
         <SummaryCard
+          label="Capabilities available"
+          value="1"
+          meta="Document summarisation"
+        />
+        <SummaryCard
           label="Capabilities evaluated"
           value={String(evaluatedCapabilityCount)}
           meta="Unique capabilities"
@@ -387,11 +524,6 @@ function App() {
               : "None"
           }
           meta="Most recent run"
-        />
-        <SummaryCard
-          label="Latest decision"
-          value={lastEvaluation ? lastEvaluation.decision : "None"}
-          meta={lastEvaluation ? `${lastEvaluation.readinessScore.toFixed(1)} score` : "No result yet"}
         />
       </section>
 
@@ -414,12 +546,16 @@ function App() {
                 <strong>{lastEvaluation.capability}</strong>
               </div>
               <div>
-                <span className="detail-label">Documents</span>
-                <strong>{lastEvaluation.documentCount}</strong>
+                <span className="detail-label">Output source</span>
+                <strong>
+                  {lastEvaluation.outputSource === "platform-model"
+                    ? "Platform model"
+                    : "Uploaded AI outputs"}
+                </strong>
               </div>
               <div>
-                <span className="detail-label">Source of truth</span>
-                <strong>{lastEvaluation.sourceCount}</strong>
+                <span className="detail-label">Documents</span>
+                <strong>{lastEvaluation.documentCount}</strong>
               </div>
               <div>
                 <span className="detail-label">Readiness</span>
@@ -443,7 +579,7 @@ function App() {
             <div className="table">
               <div className="table__head">
                 <span>Capability</span>
-                <span>When</span>
+                <span>Output</span>
                 <span>Status</span>
                 <span>Score</span>
               </div>
@@ -451,10 +587,9 @@ function App() {
                 <div key={evaluation.id} className="table__row">
                   <span>{evaluation.capability}</span>
                   <span>
-                    {new Intl.DateTimeFormat("en-AU", {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    }).format(new Date(evaluation.createdAt))}
+                    {evaluation.outputSource === "platform-model"
+                      ? "Platform model"
+                      : "Uploaded outputs"}
                   </span>
                   <DecisionPill
                     label={evaluation.decision}
@@ -480,167 +615,300 @@ function App() {
         <span className="panel-title">Select capability</span>
       </div>
 
-      <button className="capability-card capability-card--active" type="button">
+      <button className="choice-card choice-card--active" type="button">
         <div>
           <strong>Document summarisation</strong>
           <span>Available</span>
         </div>
-        <span className="capability-card__dot" />
+        <span className="choice-card__dot" />
       </button>
     </article>
   );
 
-  const renderUploadStep = () => (
+  const renderOutputSourceStep = () => (
     <article className="panel flow-panel">
       <div className="panel-header">
-        <span className="panel-title">Upload files</span>
+        <span className="panel-title">Select output source</span>
       </div>
 
-      <div className="upload-grid">
-        <label className="upload-card">
-          <input
-            hidden
-            multiple
-            type="file"
-            onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                documents: toUploadItems(event.target.files),
-              }))
-            }
-          />
-          <span className="upload-card__label">Documents</span>
-          <strong>{draft.documents.length || 0} files</strong>
-          <span className="upload-card__meta">PDF, DOCX, TXT, MD</span>
-        </label>
+      <div className="option-grid">
+        <button
+          className={`choice-card ${
+            draft.outputSource === "platform-model" ? "choice-card--active" : ""
+          }`}
+          onClick={() => updateDraft("outputSource", "platform-model")}
+          type="button"
+        >
+          <div>
+            <strong>Use platform model</strong>
+            <span>Generate summaries in the app</span>
+          </div>
+          <span className="choice-card__dot" />
+        </button>
 
-        <label className="upload-card">
-          <input
-            hidden
-            multiple
-            type="file"
-            onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                sources: toUploadItems(event.target.files),
-              }))
-            }
-          />
-          <span className="upload-card__label">Source of truth</span>
-          <strong>{draft.sources.length || 0} files</strong>
-          <span className="upload-card__meta">Reference summaries or gold outputs</span>
-        </label>
-      </div>
-
-      <div className="file-columns">
-        <div className="file-column">
-          <span className="panel-label">Documents</span>
-          {draft.documents.length > 0 ? (
-            draft.documents.map((file) => (
-              <div key={file.name} className="file-row">
-                <span>{file.name}</span>
-                <span>{file.sizeLabel}</span>
-              </div>
-            ))
-          ) : (
-            <div className="file-row file-row--empty">No files</div>
-          )}
-        </div>
-
-        <div className="file-column">
-          <span className="panel-label">Source of truth</span>
-          {draft.sources.length > 0 ? (
-            draft.sources.map((file) => (
-              <div key={file.name} className="file-row">
-                <span>{file.name}</span>
-                <span>{file.sizeLabel}</span>
-              </div>
-            ))
-          ) : (
-            <div className="file-row file-row--empty">No files</div>
-          )}
-        </div>
+        <button
+          className={`choice-card ${
+            draft.outputSource === "uploaded-outputs" ? "choice-card--active" : ""
+          }`}
+          onClick={() => updateDraft("outputSource", "uploaded-outputs")}
+          type="button"
+        >
+          <div>
+            <strong>Upload AI outputs</strong>
+            <span>Evaluate summaries from an external system</span>
+          </div>
+          <span className="choice-card__dot" />
+        </button>
       </div>
     </article>
   );
 
-  const renderSetupStep = () => (
+  const renderDocumentsStep = () => (
     <article className="panel flow-panel">
       <div className="panel-header">
-        <span className="panel-title">Evaluation setup</span>
+        <span className="panel-title">Upload documents</span>
       </div>
 
-      <div className="form-grid">
-        <label className="field field--wide">
-          <span>Target audience</span>
+      <label className="upload-card">
+        <input
+          hidden
+          multiple
+          type="file"
+          onChange={(event) => updateDraft("documents", toUploadItems(event.target.files))}
+        />
+        <div>
+          <span className="upload-card__label">Source documents</span>
+          <strong>{draft.documents.length} files</strong>
+        </div>
+        <span className="upload-card__meta">PDF, DOCX, TXT, MD</span>
+      </label>
+
+      <div className="file-columns">
+        <FileListColumn label="Documents" files={draft.documents} />
+      </div>
+    </article>
+  );
+
+  const renderTruthPackStep = () => (
+    <article className="panel flow-panel">
+      <div className="panel-header">
+        <span className="panel-title">Upload source of truth</span>
+      </div>
+
+      <div className="option-grid">
+        <label className="upload-card">
           <input
-            value={draft.audience}
+            hidden
+            multiple
+            type="file"
             onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                audience: event.target.value,
-              }))
+              updateDraft("referenceOutputs", toUploadItems(event.target.files))
             }
           />
+          <div>
+            <span className="upload-card__label">Reference outputs</span>
+            <strong>{draft.referenceOutputs.length} files</strong>
+          </div>
+          <span className="upload-card__meta">Required</span>
         </label>
 
-        <label className="field">
-          <span>Output style</span>
-          <select
-            value={draft.outputStyle}
-            onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                outputStyle: event.target.value,
-              }))
-            }
-          >
-            <option>Executive brief</option>
-            <option>Structured bullet summary</option>
-            <option>Operational digest</option>
-            <option>Board-ready briefing</option>
-          </select>
-        </label>
-
-        <label className="field">
-          <span>Max words</span>
+        <label className="upload-card">
           <input
-            min={80}
-            max={500}
-            type="number"
-            value={draft.maxWords}
+            hidden
+            multiple
+            type="file"
             onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                maxWords: Number(event.target.value),
-              }))
+              updateDraft("policyFiles", toUploadItems(event.target.files))
             }
           />
+          <div>
+            <span className="upload-card__label">Rules / policies</span>
+            <strong>{draft.policyFiles.length} files</strong>
+          </div>
+          <span className="upload-card__meta">Optional</span>
         </label>
+      </div>
 
-        <div className="field field--wide">
-          <span>Risk level</span>
-          <div className="chip-row">
-            {(["Low", "Medium", "High"] as RiskLevel[]).map((level) => (
-              <button
-                key={level}
-                className={`chip-button ${
-                  draft.riskLevel === level ? "chip-button--active" : ""
-                }`}
-                onClick={() =>
-                  setDraft((current) => ({
-                    ...current,
-                    riskLevel: level,
-                  }))
-                }
-                type="button"
-              >
-                {level}
-              </button>
-            ))}
+      <div className="file-columns">
+        <FileListColumn label="Reference outputs" files={draft.referenceOutputs} />
+        <FileListColumn label="Rules / policies" files={draft.policyFiles} />
+      </div>
+    </article>
+  );
+
+  const renderConfigureStep = () => (
+    <article className="panel flow-panel">
+      <div className="panel-header">
+        <span className="panel-title">Configure evaluation</span>
+      </div>
+
+      {draft.outputSource === "platform-model" ? (
+        <div className="form-grid">
+          <label className="field">
+            <span>Model</span>
+            <select
+              value={draft.modelId}
+              onChange={(event) => updateDraft("modelId", event.target.value)}
+            >
+              {Object.keys(modelProfiles).map((modelName) => (
+                <option key={modelName}>{modelName}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Prompt preset</span>
+            <select
+              value={draft.promptPreset}
+              onChange={(event) => updateDraft("promptPreset", event.target.value)}
+            >
+              <option>Balanced</option>
+              <option>Evidence-led</option>
+              <option>Strict</option>
+            </select>
+          </label>
+
+          <label className="field field--wide">
+            <span>Target audience</span>
+            <input
+              value={draft.audience}
+              onChange={(event) => updateDraft("audience", event.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Output style</span>
+            <select
+              value={draft.outputStyle}
+              onChange={(event) => updateDraft("outputStyle", event.target.value)}
+            >
+              <option>Executive brief</option>
+              <option>Structured bullet summary</option>
+              <option>Operational digest</option>
+              <option>Board-ready briefing</option>
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Max words</span>
+            <input
+              min={80}
+              max={500}
+              type="number"
+              value={draft.maxWords}
+              onChange={(event) => updateDraft("maxWords", Number(event.target.value))}
+            />
+          </label>
+
+          <div className="field field--wide">
+            <span>Risk level</span>
+            <div className="chip-row">
+              {(["Low", "Medium", "High"] as RiskLevel[]).map((level) => (
+                <button
+                  key={level}
+                  className={`chip-button ${
+                    draft.riskLevel === level ? "chip-button--active" : ""
+                  }`}
+                  onClick={() => updateDraft("riskLevel", level)}
+                  type="button"
+                >
+                  {level}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="form-grid">
+          <label className="upload-card upload-card--full">
+            <input
+              hidden
+              multiple
+              type="file"
+              onChange={(event) =>
+                updateDraft("aiOutputs", toUploadItems(event.target.files))
+              }
+            />
+            <div>
+              <span className="upload-card__label">Uploaded AI outputs</span>
+              <strong>{draft.aiOutputs.length} files</strong>
+            </div>
+            <span className="upload-card__meta">One output per document</span>
+          </label>
+
+          <label className="field">
+            <span>Average latency (optional)</span>
+            <input
+              placeholder="e.g. 3.2"
+              value={draft.providedLatencySeconds}
+              onChange={(event) =>
+                updateDraft("providedLatencySeconds", event.target.value)
+              }
+            />
+          </label>
+
+          <label className="field">
+            <span>Cost / document (optional)</span>
+            <input
+              placeholder="e.g. 0.021"
+              value={draft.providedCostPerDocument}
+              onChange={(event) =>
+                updateDraft("providedCostPerDocument", event.target.value)
+              }
+            />
+          </label>
+
+          <label className="field field--wide">
+            <span>Target audience</span>
+            <input
+              value={draft.audience}
+              onChange={(event) => updateDraft("audience", event.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Output style</span>
+            <select
+              value={draft.outputStyle}
+              onChange={(event) => updateDraft("outputStyle", event.target.value)}
+            >
+              <option>Executive brief</option>
+              <option>Structured bullet summary</option>
+              <option>Operational digest</option>
+              <option>Board-ready briefing</option>
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Max words</span>
+            <input
+              min={80}
+              max={500}
+              type="number"
+              value={draft.maxWords}
+              onChange={(event) => updateDraft("maxWords", Number(event.target.value))}
+            />
+          </label>
+
+          <div className="field field--wide">
+            <span>Risk level</span>
+            <div className="chip-row">
+              {(["Low", "Medium", "High"] as RiskLevel[]).map((level) => (
+                <button
+                  key={level}
+                  className={`chip-button ${
+                    draft.riskLevel === level ? "chip-button--active" : ""
+                  }`}
+                  onClick={() => updateDraft("riskLevel", level)}
+                  type="button"
+                >
+                  {level}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </article>
   );
 
@@ -656,20 +924,38 @@ function App() {
           <strong>{draft.capability}</strong>
         </div>
         <div className="review-card">
+          <span className="panel-label">Output source</span>
+          <strong>
+            {draft.outputSource === "platform-model"
+              ? "Platform model"
+              : "Uploaded AI outputs"}
+          </strong>
+        </div>
+        <div className="review-card">
           <span className="panel-label">Documents</span>
           <strong>{draft.documents.length}</strong>
         </div>
         <div className="review-card">
-          <span className="panel-label">Source of truth</span>
-          <strong>{draft.sources.length}</strong>
+          <span className="panel-label">Reference outputs</span>
+          <strong>{draft.referenceOutputs.length}</strong>
         </div>
         <div className="review-card">
-          <span className="panel-label">Output</span>
+          <span className="panel-label">Rules / policies</span>
+          <strong>{draft.policyFiles.length}</strong>
+        </div>
+        <div className="review-card">
+          <span className="panel-label">
+            {draft.outputSource === "platform-model" ? "Model" : "AI outputs"}
+          </span>
+          <strong>
+            {draft.outputSource === "platform-model"
+              ? draft.modelId
+              : `${draft.aiOutputs.length} files`}
+          </strong>
+        </div>
+        <div className="review-card">
+          <span className="panel-label">Output style</span>
           <strong>{draft.outputStyle}</strong>
-        </div>
-        <div className="review-card">
-          <span className="panel-label">Max words</span>
-          <strong>{draft.maxWords}</strong>
         </div>
         <div className="review-card">
           <span className="panel-label">Risk</span>
@@ -707,9 +993,11 @@ function App() {
       </section>
 
       {step === 1 && renderCapabilityStep()}
-      {step === 2 && renderUploadStep()}
-      {step === 3 && renderSetupStep()}
-      {step === 4 && renderReviewStep()}
+      {step === 2 && renderOutputSourceStep()}
+      {step === 3 && renderDocumentsStep()}
+      {step === 4 && renderTruthPackStep()}
+      {step === 5 && renderConfigureStep()}
+      {step === 6 && renderReviewStep()}
 
       <section className="wizard-actions">
         <button
@@ -721,7 +1009,7 @@ function App() {
           Back
         </button>
 
-        {step < 4 ? (
+        {step < 6 ? (
           <button
             className="primary-button"
             disabled={!stepReady}
@@ -749,7 +1037,7 @@ function App() {
       <header className="screen-header">
         <div>
           <span className="screen-label">Results</span>
-          <h1>Last result</h1>
+          <h1>Latest result</h1>
         </div>
         <button className="primary-button" onClick={openNewEvaluation} type="button">
           New evaluation
@@ -770,14 +1058,22 @@ function App() {
               meta="Composite score"
             />
             <SummaryCard
-              label="Documents"
-              value={String(lastEvaluation.documentCount)}
-              meta="Files in batch"
+              label="Output source"
+              value={
+                lastEvaluation.outputSource === "platform-model"
+                  ? "Platform model"
+                  : "Uploaded outputs"
+              }
+              meta={
+                lastEvaluation.outputSource === "platform-model"
+                  ? lastEvaluation.modelId ?? "No model"
+                  : `${lastEvaluation.outputCount} outputs`
+              }
             />
             <SummaryCard
-              label="Source of truth"
-              value={String(lastEvaluation.sourceCount)}
-              meta="Reference files"
+              label="Latency"
+              value={formatLatency(lastEvaluation.metrics.latency)}
+              meta={formatCurrency(lastEvaluation.costPerDocument)}
             />
           </section>
 
@@ -811,11 +1107,19 @@ function App() {
                 value={lastEvaluation.metrics.privacy}
                 target={thresholds.privacy}
               />
-              <MetricRail
-                label="Latency"
-                value={lastEvaluation.metrics.latency}
-                target={thresholds.maxLatencySeconds}
-              />
+
+              {lastEvaluation.metrics.latency === null ? (
+                <div className="issue-item issue-item--neutral">
+                  Operational latency not provided.
+                </div>
+              ) : (
+                <div className="metric-row metric-row--single">
+                  <div className="metric-row__meta">
+                    <span>Latency</span>
+                    <strong>{formatLatency(lastEvaluation.metrics.latency)}</strong>
+                  </div>
+                </div>
+              )}
             </article>
 
             <article className="panel">
@@ -850,7 +1154,7 @@ function App() {
                   <strong>{lastEvaluation.audience}</strong>
                 </div>
                 <div>
-                  <span className="detail-label">Output</span>
+                  <span className="detail-label">Output style</span>
                   <strong>{lastEvaluation.outputStyle}</strong>
                 </div>
                 <div>
@@ -866,27 +1170,18 @@ function App() {
 
             <article className="panel">
               <div className="panel-header">
-                <span className="panel-title">Uploaded files</span>
+                <span className="panel-title">Files</span>
               </div>
               <div className="file-columns">
-                <div className="file-column">
-                  <span className="panel-label">Documents</span>
-                  {lastEvaluation.documents.map((file) => (
-                    <div key={file.name} className="file-row">
-                      <span>{file.name}</span>
-                      <span>{file.sizeLabel}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="file-column">
-                  <span className="panel-label">Source of truth</span>
-                  {lastEvaluation.sources.map((file) => (
-                    <div key={file.name} className="file-row">
-                      <span>{file.name}</span>
-                      <span>{file.sizeLabel}</span>
-                    </div>
-                  ))}
-                </div>
+                <FileListColumn label="Documents" files={lastEvaluation.documents} />
+                <FileListColumn
+                  label="Reference outputs"
+                  files={lastEvaluation.referenceOutputs}
+                />
+                <FileListColumn label="Rules / policies" files={lastEvaluation.policyFiles} />
+                {lastEvaluation.outputSource === "uploaded-outputs" ? (
+                  <FileListColumn label="AI outputs" files={lastEvaluation.aiOutputs} />
+                ) : null}
               </div>
             </article>
           </section>
