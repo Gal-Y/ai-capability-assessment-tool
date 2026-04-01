@@ -1,5 +1,24 @@
 # AI Capability Assessment Tool
 
-Initial repository for the thesis prototype.
+MVP thesis prototype for assessing whether an AI capability is ready for enterprise deployment.
 
-This project will become a prototype platform for assessing enterprise AI capability readiness, with emphasis on reliability, safety, and deployment decision support.
+This version is focused on the `Document Summarisation` capability and includes:
+
+- a polished assessment dashboard
+- configurable readiness thresholds
+- a synthetic enterprise evaluation corpus
+- comparison of baseline, governed, and strict configurations
+- economic viability modelling
+
+## Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+## Build
+
+```bash
+npm run build
+```
