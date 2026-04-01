@@ -10,22 +10,56 @@ import {
 } from "./lib/evaluator";
 import type {
   CapabilityForm,
+  ConfigurationResult,
   RiskLevel,
 } from "./types";
 
-type SectionId =
-  | "overview"
-  | "capability"
-  | "dataset"
-  | "evaluation"
-  | "economics";
+type ViewId = "home" | "setup" | "scenarios" | "economics";
+type Tone = "good" | "warn" | "bad";
 
-const sectionCopy: Record<SectionId, { label: string; eyebrow: string }> = {
-  overview: { label: "Overview", eyebrow: "Prototype" },
-  capability: { label: "Capability Setup", eyebrow: "Configuration" },
-  dataset: { label: "Dataset Studio", eyebrow: "Evaluation Pack" },
-  evaluation: { label: "Readiness Results", eyebrow: "Assessment" },
-  economics: { label: "Economic Viability", eyebrow: "Deployment Case" },
+const navGroups: Array<{
+  label: string;
+  items: Array<{ id: ViewId; label: string }>;
+}> = [
+  {
+    label: "Workspace",
+    items: [
+      { id: "home", label: "Home" },
+      { id: "setup", label: "Capability" },
+    ],
+  },
+  {
+    label: "Evaluation",
+    items: [
+      { id: "scenarios", label: "Cases" },
+      { id: "economics", label: "Economics" },
+    ],
+  },
+];
+
+const chartMetrics = [
+  {
+    label: "Faith",
+    getValue: (result: ConfigurationResult) => result.faithfulness,
+  },
+  {
+    label: "Cover",
+    getValue: (result: ConfigurationResult) => result.coverage,
+  },
+  {
+    label: "Policy",
+    getValue: (result: ConfigurationResult) => result.compliance,
+  },
+  {
+    label: "Privacy",
+    getValue: (result: ConfigurationResult) => result.privacy,
+  },
+];
+
+const colorByConfig: Record<string, string> = {
+  baseline: "#7c5cff",
+  guarded: "#d8dce6",
+  strict: "#3d7aff",
 };
 
 const currencyFormatter = new Intl.NumberFormat("en-AU", {
@@ -35,54 +69,149 @@ const currencyFormatter = new Intl.NumberFormat("en-AU", {
 });
 
 const formatPercent = (value: number) => `${value.toFixed(1)}%`;
+const formatMonths = (value: number) =>
+  Number.isFinite(value) ? `${value.toFixed(1)} mo` : "No payback";
 
-const SectionTitle = ({
-  eyebrow,
-  title,
-  subtitle,
+const getDecisionTone = (decision: ConfigurationResult["deploymentDecision"]): Tone => {
+  if (decision === "Ready") {
+    return "good";
+  }
+  if (decision === "Conditional") {
+    return "warn";
+  }
+  return "bad";
+};
+
+const DecisionPill = ({
+  label,
+  tone,
 }: {
-  eyebrow: string;
-  title: string;
-  subtitle: string;
+  label: string;
+  tone: Tone;
+}) => <span className={`decision-pill decision-pill--${tone}`}>{label}</span>;
+
+const ScenarioPill = ({
+  label,
+}: {
+  label: "Pass" | "Review" | "Fail";
 }) => (
-  <div className="section-title">
-    <span className="eyebrow">{eyebrow}</span>
-    <h2>{title}</h2>
-    <p>{subtitle}</p>
-  </div>
+  <span className={`decision-pill decision-pill--${label.toLowerCase()}`}>
+    {label}
+  </span>
 );
 
 const MetricRail = ({
   label,
   value,
-  accent,
+  target,
 }: {
   label: string;
   value: number;
-  accent: string;
-}) => (
-  <div className="metric-rail">
-    <div className="metric-rail__meta">
-      <span>{label}</span>
-      <strong>{formatPercent(value)}</strong>
-    </div>
-    <div className="metric-rail__track">
-      <span
-        className="metric-rail__fill"
-        style={{ width: `${Math.min(100, value)}%`, background: accent }}
-      />
-    </div>
-  </div>
-);
+  target: number;
+}) => {
+  const passes = value >= target;
 
-const ScenarioBadge = ({ status }: { status: "Pass" | "Review" | "Fail" }) => (
-  <span className={`status-pill status-pill--${status.toLowerCase()}`}>
-    {status}
-  </span>
-);
+  return (
+    <div className="gate-row">
+      <div className="gate-row__meta">
+        <span>{label}</span>
+        <strong>{formatPercent(value)}</strong>
+      </div>
+      <div className="metric-bar">
+        <span
+          className={`metric-bar__fill metric-bar__fill--${passes ? "good" : "bad"}`}
+          style={{ width: `${Math.min(value, 100)}%` }}
+        />
+        <span className="metric-bar__target" style={{ left: `${target}%` }} />
+      </div>
+    </div>
+  );
+};
+
+const TrendChart = ({
+  results,
+}: {
+  results: ConfigurationResult[];
+}) => {
+  const width = 560;
+  const height = 190;
+  const paddingX = 30;
+  const paddingY = 22;
+  const chartHeight = height - paddingY * 2;
+  const stepX = (width - paddingX * 2) / (chartMetrics.length - 1);
+
+  return (
+    <div className="trend-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Config quality chart">
+        {[0, 25, 50, 75, 100].map((tick) => {
+          const y = paddingY + (100 - tick) / 100 * chartHeight;
+
+          return (
+            <line
+              key={tick}
+              x1={paddingX}
+              x2={width - paddingX}
+              y1={y}
+              y2={y}
+              className="trend-chart__grid"
+            />
+          );
+        })}
+
+        {results.map((result) => {
+          const points = chartMetrics
+            .map((metric, index) => {
+              const x = paddingX + stepX * index;
+              const y =
+                paddingY +
+                (100 - metric.getValue(result)) / 100 * chartHeight;
+
+              return `${x},${y}`;
+            })
+            .join(" ");
+
+          return (
+            <g key={result.config.id}>
+              <polyline
+                fill="none"
+                points={points}
+                stroke={colorByConfig[result.config.id]}
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              {chartMetrics.map((metric, index) => {
+                const cx = paddingX + stepX * index;
+                const cy =
+                  paddingY +
+                  (100 - metric.getValue(result)) / 100 * chartHeight;
+
+                return (
+                  <circle
+                    key={`${result.config.id}-${metric.label}`}
+                    cx={cx}
+                    cy={cy}
+                    r="4"
+                    fill={colorByConfig[result.config.id]}
+                  />
+                );
+              })}
+            </g>
+          );
+        })}
+      </svg>
+
+      <div className="trend-chart__axis">
+        {chartMetrics.map((metric) => (
+          <span key={metric.label}>{metric.label}</span>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 function App() {
-  const [activeSection, setActiveSection] = useState<SectionId>("overview");
+  const [activeView, setActiveView] = useState<ViewId>("home");
   const [form, setForm] = useState<CapabilityForm>(defaultCapabilityForm);
   const [selectedConfigId, setSelectedConfigId] = useState("strict");
   const [lastRunAt, setLastRunAt] = useState(() => new Date());
@@ -91,13 +220,22 @@ function App() {
   const champion = getChampionConfiguration(results);
   const selectedResult =
     results.find((result) => result.config.id === selectedConfigId) ?? champion;
-  const metricsAverage = (
-    selectedResult.faithfulness +
-    selectedResult.coverage +
-    selectedResult.compliance +
-    selectedResult.privacy
-  ) /
-  4;
+  const championTone = getDecisionTone(champion.deploymentDecision);
+  const selectedTone = getDecisionTone(selectedResult.deploymentDecision);
+  const passCount = selectedResult.scenarioResults.filter(
+    (scenario) => scenario.status === "Pass",
+  ).length;
+  const reviewCount = selectedResult.scenarioResults.filter(
+    (scenario) => scenario.status === "Review",
+  ).length;
+  const failCount = selectedResult.scenarioResults.filter(
+    (scenario) => scenario.status === "Fail",
+  ).length;
+  const passRate =
+    (passCount / Math.max(1, selectedResult.scenarioResults.length)) * 100;
+  const flaggedCases = [...selectedResult.scenarioResults].sort(
+    (left, right) => left.score - right.score,
+  );
 
   const updateField = <Key extends keyof CapabilityForm>(
     key: Key,
@@ -131,770 +269,674 @@ function App() {
     }));
   };
 
-  const rerunAssessment = () => {
+  const runAssessment = () => {
     setLastRunAt(new Date());
-    setActiveSection("evaluation");
+    setActiveView("home");
   };
 
-  const decisionTone =
-    champion.deploymentDecision === "Ready"
-      ? "good"
-      : champion.deploymentDecision === "Conditional"
-        ? "warn"
-        : "bad";
-
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-block">
-          <div className="brand-mark">
-            <span>A</span>
-          </div>
-          <div>
-            <p className="brand-overline">Thesis Prototype</p>
-            <h1>AI Capability Assessment Tool</h1>
-          </div>
+  const renderHome = () => (
+    <>
+      <header className="screen-header">
+        <div>
+          <span className="screen-label">Document Summarisation</span>
+          <h1>Readiness workspace</h1>
         </div>
-
-        <div className="sidebar-panel">
-          <span className="sidebar-label">Capability</span>
-          <strong>{form.capabilityName}</strong>
-          <p>
-            Initialised for document summarisation with enterprise governance,
-            readiness scoring, and viability modelling.
-          </p>
+        <div className="screen-actions">
+          <span className="run-stamp">
+            {new Intl.DateTimeFormat("en-AU", {
+              dateStyle: "medium",
+              timeStyle: "short",
+            }).format(lastRunAt)}
+          </span>
+          <button className="ghost-button" onClick={() => setActiveView("setup")} type="button">
+            Setup
+          </button>
+          <button className="primary-button" onClick={runAssessment} type="button">
+            Run
+          </button>
         </div>
+      </header>
 
-        <nav className="nav-list">
-          {(Object.keys(sectionCopy) as SectionId[]).map((section) => (
-            <button
-              key={section}
-              className={`nav-item ${
-                activeSection === section ? "nav-item--active" : ""
-              }`}
-              onClick={() => setActiveSection(section)}
-              type="button"
+      <section className="top-cards">
+        <article className="panel summary-card summary-card--accent">
+          <span className="card-label">Overall</span>
+          <div className="summary-card__value">
+            <DecisionPill label={champion.deploymentDecision} tone={championTone} />
+            <strong>{champion.readinessScore.toFixed(1)}</strong>
+          </div>
+          <div className="summary-card__meta">
+            <span>{champion.config.name}</span>
+            <span>{formatPercent(champion.faithfulness)}</span>
+          </div>
+        </article>
+
+        <article className="panel summary-card">
+          <span className="card-label">Top config</span>
+          <strong>{champion.config.label}</strong>
+          <div className="summary-card__meta">
+            <span>{champion.config.name}</span>
+            <span>{formatPercent(champion.privacy)}</span>
+          </div>
+        </article>
+
+        <article className="panel summary-card">
+          <span className="card-label">Gate status</span>
+          <strong>{5 - champion.gateFailures.length}/5</strong>
+          <div className="summary-card__meta">
+            <span>Thresholds</span>
+            <span>{champion.gateFailures.length} issues</span>
+          </div>
+        </article>
+
+        <article className="panel summary-card">
+          <span className="card-label">Payback</span>
+          <strong>{formatMonths(champion.paybackMonths)}</strong>
+          <div className="summary-card__meta">
+            <span>Savings</span>
+            <span>{currencyFormatter.format(champion.monthlySavings)}</span>
+          </div>
+        </article>
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="panel gauge-panel">
+          <div className="panel-head">
+            <span className="panel-title">Latest run</span>
+            <span className="panel-meta">{selectedResult.config.name}</span>
+          </div>
+
+          <div className="gauge-wrap">
+            <div
+              className="gauge"
+              style={{
+                background: `conic-gradient(var(--success) ${passRate}%, rgba(255,255,255,0.08) 0)`,
+              }}
             >
-              <span>{sectionCopy[section].eyebrow}</span>
-              <strong>{sectionCopy[section].label}</strong>
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-panel sidebar-panel--highlight">
-          <span className="sidebar-label">Champion configuration</span>
-          <div className="stack">
-            <strong>{champion.config.name}</strong>
-            <span className={`signal signal--${decisionTone}`}>
-              {champion.deploymentDecision}
-            </span>
-          </div>
-          <p>
-            {champion.config.summary} Readiness index{" "}
-            {champion.readinessScore.toFixed(1)}.
-          </p>
-        </div>
-      </aside>
-
-      <main className="workspace">
-        <header className="hero-card glass-card">
-          <div className="hero-copy">
-            <span className="eyebrow">Document Summarisation Capability</span>
-            <h2>Assess whether summarisation is ready for enterprise deployment.</h2>
-            <p>
-              This MVP lets you define the capability profile, inspect the test
-              corpus, compare governed configurations, and decide whether the
-              capability is technically and economically worth deploying.
-            </p>
-            <div className="hero-meta">
-              <span className="sidebar-label">Last run</span>
-              <strong>
-                {new Intl.DateTimeFormat("en-AU", {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                }).format(lastRunAt)}
-              </strong>
-            </div>
-            <div className="hero-actions">
-              <button className="primary-button" onClick={rerunAssessment} type="button">
-                Run assessment
-              </button>
-              <button
-                className="secondary-button"
-                onClick={() => setActiveSection("capability")}
-                type="button"
-              >
-                Edit inputs
-              </button>
-            </div>
-          </div>
-
-          <div className="hero-score">
-            <div className={`signal-panel signal-panel--${decisionTone}`}>
-              <span className="sidebar-label">Deployment decision</span>
-              <strong>{champion.deploymentDecision}</strong>
-              <p>
-                Based on governance thresholds, privacy controls, and target
-                payback period.
-              </p>
-            </div>
-            <div className="ring-card">
-              <div
-                className="readiness-ring"
-                style={{
-                  background: `conic-gradient(#56b8ff ${champion.readinessScore}%, rgba(255,255,255,0.08) 0)`,
-                }}
-              >
-                <div className="readiness-ring__inner">
-                  <strong>{champion.readinessScore.toFixed(0)}</strong>
-                  <span>Index</span>
-                </div>
+              <div className="gauge__inner">
+                <strong>{passRate.toFixed(1)}%</strong>
+                <span>{passCount}/{selectedResult.scenarioResults.length} passed</span>
               </div>
             </div>
           </div>
-        </header>
 
-        <section className="summary-grid">
-          <article className="solid-card stat-card">
-            <span className="sidebar-label">Faithfulness</span>
-            <strong>{formatPercent(champion.faithfulness)}</strong>
-            <p>Grounded output rate across the seeded enterprise evaluation pack.</p>
-          </article>
-          <article className="solid-card stat-card">
-            <span className="sidebar-label">Privacy posture</span>
-            <strong>{formatPercent(champion.privacy)}</strong>
-            <p>Measures whether summaries keep restricted content out of general use.</p>
-          </article>
-          <article className="solid-card stat-card">
-            <span className="sidebar-label">Monthly savings</span>
-            <strong>{currencyFormatter.format(champion.monthlySavings)}</strong>
-            <p>Estimated operating savings against the current manual summarisation flow.</p>
-          </article>
-          <article className="solid-card stat-card">
-            <span className="sidebar-label">Payback</span>
-            <strong>
-              {Number.isFinite(champion.paybackMonths)
-                ? `${champion.paybackMonths.toFixed(1)} months`
-                : "No payback"}
-            </strong>
-            <p>Compared against your deployment target of {form.paybackTargetMonths} months.</p>
-          </article>
-        </section>
-
-        {activeSection === "overview" && (
-          <section className="content-grid page-enter">
-            <div className="glass-card">
-              <SectionTitle
-                eyebrow="Capability Snapshot"
-                title="Assessment profile"
-                subtitle="The tool treats document summarisation as a reusable capability definition, not a company-specific one-off workflow."
-              />
-              <div className="detail-list">
-                <div>
-                  <span>Audience</span>
-                  <strong>{form.targetAudience}</strong>
-                </div>
-                <div>
-                  <span>Document mix</span>
-                  <strong>{form.documentType}</strong>
-                </div>
-                <div>
-                  <span>Output style</span>
-                  <strong>
-                    {form.summaryStyle}, {form.outputLength} words max
-                  </strong>
-                </div>
-                <div>
-                  <span>Risk level</span>
-                  <strong>{form.riskLevel}</strong>
-                </div>
-              </div>
-              <div className="pill-row">
-                {form.requiredSections.map((section) => (
-                  <span key={section} className="surface-pill">
-                    {section}
-                  </span>
-                ))}
-              </div>
+          <div className="stat-strip">
+            <div>
+              <span>Pass</span>
+              <strong>{passCount}</strong>
             </div>
-
-            <div className="solid-card">
-              <SectionTitle
-                eyebrow="Thresholds"
-                title="Deployment gates"
-                subtitle="These gates determine whether a configuration is recommended, conditional, or blocked."
-              />
-              <MetricRail label="Faithfulness gate" value={form.thresholds.faithfulness} accent="#56b8ff" />
-              <MetricRail label="Coverage gate" value={form.thresholds.coverage} accent="#7df0cf" />
-              <MetricRail label="Compliance gate" value={form.thresholds.compliance} accent="#ffc067" />
-              <MetricRail label="Privacy gate" value={form.thresholds.privacy} accent="#63f5c8" />
-              <div className="mini-note">
-                Average latency target: <strong>{form.thresholds.maxLatencySeconds}s</strong>
-              </div>
+            <div>
+              <span>Review</span>
+              <strong>{reviewCount}</strong>
             </div>
+            <div>
+              <span>Fail</span>
+              <strong>{failCount}</strong>
+            </div>
+            <div>
+              <span>Latency</span>
+              <strong>{selectedResult.latencySeconds.toFixed(1)}s</strong>
+            </div>
+          </div>
+        </article>
 
-            <div className="solid-card full-span">
-              <SectionTitle
-                eyebrow="Champion Evidence"
-                title={`${champion.config.name} is the current deployment candidate`}
-                subtitle="The selected configuration is the one the framework currently considers strongest against your declared thresholds."
-              />
-              <div className="comparison-grid">
+        <article className="panel cases-panel">
+          <div className="panel-head panel-head--stack">
+            <div>
+              <span className="panel-title">Case review</span>
+            </div>
+            <div className="tab-row">
+              {results.map((result) => (
+                <button
+                  key={result.config.id}
+                  className={`tab-button ${
+                    selectedResult.config.id === result.config.id
+                      ? "tab-button--active"
+                      : ""
+                  }`}
+                  onClick={() => setSelectedConfigId(result.config.id)}
+                  type="button"
+                >
+                  {result.config.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="table">
+            <div className="table__head">
+              <span>Case</span>
+              <span>Status</span>
+              <span>Score</span>
+              <span>Finding</span>
+            </div>
+            {flaggedCases.map((scenario) => (
+              <div key={scenario.scenarioId} className="table__row">
                 <div>
-                  <MetricRail label="Faithfulness" value={champion.faithfulness} accent="#56b8ff" />
-                  <MetricRail label="Coverage" value={champion.coverage} accent="#7df0cf" />
+                  <strong>{scenario.title}</strong>
+                  <span>{scenario.latencySeconds.toFixed(1)}s</span>
                 </div>
-                <div>
-                  <MetricRail label="Compliance" value={champion.compliance} accent="#ffc067" />
-                  <MetricRail label="Privacy" value={champion.privacy} accent="#63f5c8" />
-                </div>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {activeSection === "capability" && (
-          <section className="content-grid page-enter">
-            <div className="glass-card full-span">
-              <SectionTitle
-                eyebrow="Configuration"
-                title="Capability definition"
-                subtitle="Adjust the operational context and the readiness gates. The assessment refreshes instantly."
-              />
-
-              <div className="form-grid">
-                <label className="field">
-                  <span>Capability name</span>
-                  <input
-                    value={form.capabilityName}
-                    onChange={(event) => updateField("capabilityName", event.target.value)}
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Target audience</span>
-                  <input
-                    value={form.targetAudience}
-                    onChange={(event) => updateField("targetAudience", event.target.value)}
-                  />
-                </label>
-
-                <label className="field field--wide">
-                  <span>Business purpose</span>
-                  <textarea
-                    rows={3}
-                    value={form.businessPurpose}
-                    onChange={(event) => updateField("businessPurpose", event.target.value)}
-                  />
-                </label>
-
-                <label className="field field--wide">
-                  <span>Document mix</span>
-                  <input
-                    value={form.documentType}
-                    onChange={(event) => updateField("documentType", event.target.value)}
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Summary style</span>
-                  <select
-                    value={form.summaryStyle}
-                    onChange={(event) => updateField("summaryStyle", event.target.value)}
-                  >
-                    <option>Executive brief</option>
-                    <option>Structured bullet summary</option>
-                    <option>Operational digest</option>
-                    <option>Board-ready briefing</option>
-                  </select>
-                </label>
-
-                <label className="field">
-                  <span>Maximum length (words)</span>
-                  <input
-                    min={80}
-                    max={500}
-                    type="number"
-                    value={form.outputLength}
-                    onChange={(event) =>
-                      updateField("outputLength", Number(event.target.value))
-                    }
-                  />
-                </label>
-
-                <div className="field">
-                  <span>Risk level</span>
-                  <div className="toggle-row">
-                    {(["Low", "Medium", "High"] as RiskLevel[]).map((level) => (
-                      <button
-                        key={level}
-                        type="button"
-                        className={`toggle-chip ${
-                          form.riskLevel === level ? "toggle-chip--active" : ""
-                        }`}
-                        onClick={() => updateField("riskLevel", level)}
-                      >
-                        {level}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <label className="field field--wide">
-                  <span>Never include</span>
-                  <textarea
-                    rows={3}
-                    value={form.excludedContent}
-                    onChange={(event) => updateField("excludedContent", event.target.value)}
-                  />
-                </label>
-              </div>
-
-              <div className="subsection">
-                <div className="subsection-header">
-                  <div>
-                    <span className="eyebrow">Required sections</span>
-                    <h3>Summary structure</h3>
-                  </div>
-                </div>
-                <div className="token-editor">
-                  {form.requiredSections.map((section, index) => (
-                    <input
-                      key={`${section}-${index}`}
-                      value={section}
-                      onChange={(event) =>
-                        updateRequiredSection(index, event.target.value)
-                      }
-                    />
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="solid-card">
-              <SectionTitle
-                eyebrow="Threshold Controls"
-                title="Technical gates"
-                subtitle="Move these thresholds to tighten or loosen the deployment bar."
-              />
-              <div className="slider-stack">
-                <label className="slider-field">
-                  <div>
-                    <span>Faithfulness</span>
-                    <strong>{form.thresholds.faithfulness}%</strong>
-                  </div>
-                  <input
-                    type="range"
-                    min={70}
-                    max={99}
-                    value={form.thresholds.faithfulness}
-                    onChange={(event) =>
-                      updateThreshold("faithfulness", Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="slider-field">
-                  <div>
-                    <span>Coverage</span>
-                    <strong>{form.thresholds.coverage}%</strong>
-                  </div>
-                  <input
-                    type="range"
-                    min={70}
-                    max={99}
-                    value={form.thresholds.coverage}
-                    onChange={(event) =>
-                      updateThreshold("coverage", Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="slider-field">
-                  <div>
-                    <span>Compliance</span>
-                    <strong>{form.thresholds.compliance}%</strong>
-                  </div>
-                  <input
-                    type="range"
-                    min={70}
-                    max={99}
-                    value={form.thresholds.compliance}
-                    onChange={(event) =>
-                      updateThreshold("compliance", Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="slider-field">
-                  <div>
-                    <span>Privacy</span>
-                    <strong>{form.thresholds.privacy}%</strong>
-                  </div>
-                  <input
-                    type="range"
-                    min={80}
-                    max={100}
-                    value={form.thresholds.privacy}
-                    onChange={(event) =>
-                      updateThreshold("privacy", Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="slider-field">
-                  <div>
-                    <span>Max latency</span>
-                    <strong>{form.thresholds.maxLatencySeconds}s</strong>
-                  </div>
-                  <input
-                    type="range"
-                    min={2}
-                    max={9}
-                    value={form.thresholds.maxLatencySeconds}
-                    onChange={(event) =>
-                      updateThreshold("maxLatencySeconds", Number(event.target.value))
-                    }
-                  />
-                </label>
-              </div>
-            </div>
-
-            <div className="solid-card">
-              <SectionTitle
-                eyebrow="Live Recommendation"
-                title="What the current inputs imply"
-                subtitle="As you change thresholds or operating context, the framework updates its recommendation."
-              />
-              <div className="decision-card">
-                <span className={`signal signal--${decisionTone}`}>
-                  {champion.deploymentDecision}
+                <ScenarioPill label={scenario.status} />
+                <strong>{scenario.score.toFixed(1)}</strong>
+                <span>
+                  {scenario.findings[0] ?? "No issue"}
                 </span>
-                <strong>{champion.config.name}</strong>
-                <p>{champion.config.summary}</p>
               </div>
-              <div className="mini-note">
-                Strongest aggregate score:{" "}
-                <strong>{champion.readinessScore.toFixed(1)}</strong>
-              </div>
-            </div>
-          </section>
-        )}
+            ))}
+          </div>
+        </article>
+      </section>
 
-        {activeSection === "dataset" && (
-          <section className="content-grid page-enter">
-            <div className="solid-card">
-              <SectionTitle
-                eyebrow="Synthetic Corpus"
-                title="Enterprise evidence pack"
-                subtitle="The MVP uses a fictional enterprise corpus so the framework is reusable while still being testable."
-              />
-              <div className="document-list">
-                {enterpriseDocuments.map((document) => (
-                  <article key={document.id} className="document-card">
-                    <div className="document-card__meta">
-                      <span>{document.type}</span>
-                      <span>{document.classification}</span>
-                    </div>
-                    <strong>{document.title}</strong>
-                    <p>{document.note}</p>
-                    <div className="document-card__footer">
-                      <span>{document.lengthPages} pages</span>
-                      <span>{document.freshness}</span>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
+      <section className="dashboard-grid dashboard-grid--lower">
+        <article className="panel">
+          <div className="panel-head">
+            <span className="panel-title">Config quality</span>
+          </div>
+          <TrendChart results={results} />
+          <div className="legend-row">
+            {results.map((result) => (
+              <span key={result.config.id} className="legend-item">
+                <i
+                  className="legend-swatch"
+                  style={{ background: colorByConfig[result.config.id] }}
+                />
+                {result.config.name}
+              </span>
+            ))}
+          </div>
+        </article>
 
-            <div className="glass-card">
-              <SectionTitle
-                eyebrow="Evaluation Cases"
-                title="Readiness scenarios"
-                subtitle="Each scenario expresses a practical enterprise use case with required points and restricted content."
-              />
-              <div className="scenario-stack">
-                {evaluationScenarios.map((scenario) => (
-                  <article key={scenario.id} className="scenario-card">
-                    <div className="scenario-card__head">
-                      <strong>{scenario.title}</strong>
-                      <span>{scenario.audience}</span>
-                    </div>
-                    <p>{scenario.goal}</p>
-                    <div className="pill-row">
-                      {scenario.requiredPoints.map((point) => (
-                        <span key={point} className="surface-pill">
-                          {point}
-                        </span>
-                      ))}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
-          </section>
-        )}
+        <article className="panel">
+          <div className="panel-head">
+            <span className="panel-title">Gates</span>
+            <DecisionPill label={selectedResult.deploymentDecision} tone={selectedTone} />
+          </div>
 
-        {activeSection === "evaluation" && (
-          <section className="content-grid page-enter">
-            <div className="glass-card full-span">
-              <SectionTitle
-                eyebrow="Configuration Comparison"
-                title="Which deployment pattern is acceptable?"
-                subtitle="The framework compares three governance levels rather than scoring a single prompt in isolation."
+          <MetricRail
+            label="Faithfulness"
+            value={selectedResult.faithfulness}
+            target={form.thresholds.faithfulness}
+          />
+          <MetricRail
+            label="Coverage"
+            value={selectedResult.coverage}
+            target={form.thresholds.coverage}
+          />
+          <MetricRail
+            label="Policy"
+            value={selectedResult.compliance}
+            target={form.thresholds.compliance}
+          />
+          <MetricRail
+            label="Privacy"
+            value={selectedResult.privacy}
+            target={form.thresholds.privacy}
+          />
+
+          <div className="issue-stack">
+            {selectedResult.gateFailures.length > 0 ? (
+              selectedResult.gateFailures.map((failure) => (
+                <div key={failure} className="issue-chip">
+                  {failure}
+                </div>
+              ))
+            ) : (
+              <div className="issue-chip issue-chip--good">All gates clear</div>
+            )}
+          </div>
+        </article>
+      </section>
+    </>
+  );
+
+  const renderSetup = () => (
+    <>
+      <header className="screen-header">
+        <div>
+          <span className="screen-label">Capability</span>
+          <h1>Setup</h1>
+        </div>
+      </header>
+
+      <section className="editor-grid">
+        <article className="panel panel--wide">
+          <div className="panel-head">
+            <span className="panel-title">Profile</span>
+          </div>
+
+          <div className="form-grid">
+            <label className="field">
+              <span>Name</span>
+              <input
+                value={form.capabilityName}
+                onChange={(event) => updateField("capabilityName", event.target.value)}
               />
-              <div className="config-grid">
-                {results.map((result) => (
+            </label>
+
+            <label className="field">
+              <span>Audience</span>
+              <input
+                value={form.targetAudience}
+                onChange={(event) => updateField("targetAudience", event.target.value)}
+              />
+            </label>
+
+            <label className="field field--wide">
+              <span>Purpose</span>
+              <textarea
+                rows={3}
+                value={form.businessPurpose}
+                onChange={(event) => updateField("businessPurpose", event.target.value)}
+              />
+            </label>
+
+            <label className="field field--wide">
+              <span>Documents</span>
+              <input
+                value={form.documentType}
+                onChange={(event) => updateField("documentType", event.target.value)}
+              />
+            </label>
+
+            <label className="field">
+              <span>Style</span>
+              <select
+                value={form.summaryStyle}
+                onChange={(event) => updateField("summaryStyle", event.target.value)}
+              >
+                <option>Executive brief</option>
+                <option>Structured bullet summary</option>
+                <option>Operational digest</option>
+                <option>Board-ready briefing</option>
+              </select>
+            </label>
+
+            <label className="field">
+              <span>Max words</span>
+              <input
+                min={80}
+                max={500}
+                type="number"
+                value={form.outputLength}
+                onChange={(event) =>
+                  updateField("outputLength", Number(event.target.value))
+                }
+              />
+            </label>
+
+            <div className="field">
+              <span>Risk</span>
+              <div className="chip-row">
+                {(["Low", "Medium", "High"] as RiskLevel[]).map((level) => (
                   <button
-                    key={result.config.id}
-                    className={`config-card ${
-                      selectedResult.config.id === result.config.id
-                        ? "config-card--selected"
-                        : ""
+                    key={level}
+                    className={`chip-button ${
+                      form.riskLevel === level ? "chip-button--active" : ""
                     }`}
-                    onClick={() => setSelectedConfigId(result.config.id)}
+                    onClick={() => updateField("riskLevel", level)}
                     type="button"
                   >
-                    <div className="config-card__head">
-                      <div>
-                        <span>{result.config.label}</span>
-                        <strong>{result.config.name}</strong>
-                      </div>
-                      <span
-                        className={`signal signal--${
-                          result.deploymentDecision === "Ready"
-                            ? "good"
-                            : result.deploymentDecision === "Conditional"
-                              ? "warn"
-                              : "bad"
-                        }`}
-                      >
-                        {result.deploymentDecision}
-                      </span>
-                    </div>
-                    <p>{result.config.summary}</p>
-                    <div className="config-card__stats">
-                      <div>
-                        <span>Readiness index</span>
-                        <strong>{result.readinessScore.toFixed(1)}</strong>
-                      </div>
-                      <div>
-                        <span>Monthly savings</span>
-                        <strong>{currencyFormatter.format(result.monthlySavings)}</strong>
-                      </div>
-                    </div>
+                    {level}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="solid-card">
-              <SectionTitle
-                eyebrow="Selected Configuration"
-                title={selectedResult.config.name}
-                subtitle="Detailed view of the currently selected operating pattern."
+            <label className="field field--wide">
+              <span>Exclude</span>
+              <textarea
+                rows={3}
+                value={form.excludedContent}
+                onChange={(event) => updateField("excludedContent", event.target.value)}
               />
-              <MetricRail label="Faithfulness" value={selectedResult.faithfulness} accent="#56b8ff" />
-              <MetricRail label="Coverage" value={selectedResult.coverage} accent="#7df0cf" />
-              <MetricRail label="Compliance" value={selectedResult.compliance} accent="#ffc067" />
-              <MetricRail label="Privacy" value={selectedResult.privacy} accent="#63f5c8" />
-              <div className="detail-list detail-list--compact">
+            </label>
+          </div>
+
+          <div className="panel-head panel-head--spaced">
+            <span className="panel-title">Sections</span>
+          </div>
+          <div className="token-row">
+            {form.requiredSections.map((section, index) => (
+              <input
+                key={`${section}-${index}`}
+                value={section}
+                onChange={(event) =>
+                  updateRequiredSection(index, event.target.value)
+                }
+              />
+            ))}
+          </div>
+        </article>
+
+        <article className="panel">
+          <div className="panel-head">
+            <span className="panel-title">Thresholds</span>
+          </div>
+
+          <div className="slider-stack">
+            <label className="slider-field">
+              <div>
+                <span>Faithfulness</span>
+                <strong>{form.thresholds.faithfulness}%</strong>
+              </div>
+              <input
+                type="range"
+                min={70}
+                max={99}
+                value={form.thresholds.faithfulness}
+                onChange={(event) =>
+                  updateThreshold("faithfulness", Number(event.target.value))
+                }
+              />
+            </label>
+
+            <label className="slider-field">
+              <div>
+                <span>Coverage</span>
+                <strong>{form.thresholds.coverage}%</strong>
+              </div>
+              <input
+                type="range"
+                min={70}
+                max={99}
+                value={form.thresholds.coverage}
+                onChange={(event) =>
+                  updateThreshold("coverage", Number(event.target.value))
+                }
+              />
+            </label>
+
+            <label className="slider-field">
+              <div>
+                <span>Policy</span>
+                <strong>{form.thresholds.compliance}%</strong>
+              </div>
+              <input
+                type="range"
+                min={70}
+                max={99}
+                value={form.thresholds.compliance}
+                onChange={(event) =>
+                  updateThreshold("compliance", Number(event.target.value))
+                }
+              />
+            </label>
+
+            <label className="slider-field">
+              <div>
+                <span>Privacy</span>
+                <strong>{form.thresholds.privacy}%</strong>
+              </div>
+              <input
+                type="range"
+                min={80}
+                max={100}
+                value={form.thresholds.privacy}
+                onChange={(event) =>
+                  updateThreshold("privacy", Number(event.target.value))
+                }
+              />
+            </label>
+
+            <label className="slider-field">
+              <div>
+                <span>Latency</span>
+                <strong>{form.thresholds.maxLatencySeconds}s</strong>
+              </div>
+              <input
+                type="range"
+                min={2}
+                max={9}
+                value={form.thresholds.maxLatencySeconds}
+                onChange={(event) =>
+                  updateThreshold("maxLatencySeconds", Number(event.target.value))
+                }
+              />
+            </label>
+          </div>
+        </article>
+      </section>
+    </>
+  );
+
+  const renderScenarios = () => (
+    <>
+      <header className="screen-header">
+        <div>
+          <span className="screen-label">Evaluation</span>
+          <h1>Cases</h1>
+        </div>
+      </header>
+
+      <section className="editor-grid">
+        <article className="panel">
+          <div className="panel-head">
+            <span className="panel-title">Documents</span>
+          </div>
+          <div className="list-stack">
+            {enterpriseDocuments.map((document) => (
+              <div key={document.id} className="list-row">
                 <div>
-                  <span>Average latency</span>
-                  <strong>{selectedResult.latencySeconds.toFixed(1)}s</strong>
+                  <strong>{document.title}</strong>
+                  <span>
+                    {document.type} · {document.classification}
+                  </span>
                 </div>
+                <span>{document.lengthPages}p</span>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="panel panel--wide">
+          <div className="panel-head">
+            <span className="panel-title">Scenarios</span>
+          </div>
+          <div className="table">
+            <div className="table__head">
+              <span>Scenario</span>
+              <span>Audience</span>
+              <span>Difficulty</span>
+              <span>Restricted</span>
+            </div>
+            {evaluationScenarios.map((scenario) => (
+              <div key={scenario.id} className="table__row">
                 <div>
-                  <span>Composite quality</span>
-                  <strong>{formatPercent(metricsAverage)}</strong>
+                  <strong>{scenario.title}</strong>
+                  <span>{scenario.goal}</span>
                 </div>
+                <span>{scenario.audience}</span>
+                <strong>{scenario.difficulty}/4</strong>
+                <span>{scenario.restrictedContent.length}</span>
               </div>
-            </div>
+            ))}
+          </div>
+        </article>
+      </section>
+    </>
+  );
 
-            <div className="solid-card">
-              <SectionTitle
-                eyebrow="Gate Review"
-                title="Deployment blockers"
-                subtitle="Any failed gate is surfaced directly so the recommendation is explainable."
-              />
-              {selectedResult.gateFailures.length > 0 ? (
-                <ul className="finding-list">
-                  {selectedResult.gateFailures.map((failure) => (
-                    <li key={failure}>{failure}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="empty-state">
-                  No hard gate failures under the current thresholds.
-                </p>
-              )}
-            </div>
+  const renderEconomics = () => (
+    <>
+      <header className="screen-header">
+        <div>
+          <span className="screen-label">Economics</span>
+          <h1>Business case</h1>
+        </div>
+      </header>
 
-            <div className="glass-card full-span">
-              <SectionTitle
-                eyebrow="Failure Explorer"
-                title="Scenario-level evidence"
-                subtitle="Each evaluation case shows its score, status, and the specific reason it was flagged."
-              />
-              <div className="results-table">
-                <div className="results-table__header">
-                  <span>Scenario</span>
-                  <span>Status</span>
-                  <span>Score</span>
-                  <span>Findings</span>
-                </div>
-                {selectedResult.scenarioResults.map((scenario) => (
-                  <div key={scenario.scenarioId} className="results-table__row">
-                    <div>
-                      <strong>{scenario.title}</strong>
-                      <span>
-                        {scenario.latencySeconds.toFixed(1)}s, {scenario.reviewMinutes.toFixed(1)}m review
-                      </span>
-                    </div>
-                    <ScenarioBadge status={scenario.status} />
-                    <strong>{scenario.score.toFixed(1)}</strong>
-                    <p>
-                      {scenario.findings.length > 0
-                        ? scenario.findings[0]
-                        : "No material issues triggered in this scenario."}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-        )}
+      <section className="editor-grid">
+        <article className="panel panel--wide">
+          <div className="panel-head">
+            <span className="panel-title">Inputs</span>
+          </div>
 
-        {activeSection === "economics" && (
-          <section className="content-grid page-enter">
-            <div className="glass-card">
-              <SectionTitle
-                eyebrow="Operating Assumptions"
-                title="Business viability inputs"
-                subtitle="These values estimate whether the capability is worth deploying once it is technically safe enough."
+          <div className="form-grid">
+            <label className="field">
+              <span>Volume / month</span>
+              <input
+                min={100}
+                type="number"
+                value={form.volumePerMonth}
+                onChange={(event) =>
+                  updateField("volumePerMonth", Number(event.target.value))
+                }
               />
-              <div className="form-grid">
-                <label className="field">
-                  <span>Monthly document volume</span>
-                  <input
-                    min={100}
-                    type="number"
-                    value={form.volumePerMonth}
-                    onChange={(event) =>
-                      updateField("volumePerMonth", Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>Manual minutes per document</span>
-                  <input
-                    min={1}
-                    type="number"
-                    value={form.manualMinutesPerDocument}
-                    onChange={(event) =>
-                      updateField(
-                        "manualMinutesPerDocument",
-                        Number(event.target.value),
-                      )
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>Reviewer hourly rate</span>
-                  <input
-                    min={20}
-                    type="number"
-                    value={form.reviewHourlyRate}
-                    onChange={(event) =>
-                      updateField("reviewHourlyRate", Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>Monthly maintenance cost</span>
-                  <input
-                    min={0}
-                    type="number"
-                    value={form.maintenanceCost}
-                    onChange={(event) =>
-                      updateField("maintenanceCost", Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>Implementation cost</span>
-                  <input
-                    min={0}
-                    type="number"
-                    value={form.implementationCost}
-                    onChange={(event) =>
-                      updateField("implementationCost", Number(event.target.value))
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>Target payback (months)</span>
-                  <input
-                    min={1}
-                    type="number"
-                    value={form.paybackTargetMonths}
-                    onChange={(event) =>
-                      updateField("paybackTargetMonths", Number(event.target.value))
-                    }
-                  />
-                </label>
-              </div>
-            </div>
+            </label>
 
-            <div className="solid-card">
-              <SectionTitle
-                eyebrow="Business Case"
-                title={`${selectedResult.config.name} economics`}
-                subtitle="The business case should pass only if technical quality and economics align."
+            <label className="field">
+              <span>Manual mins</span>
+              <input
+                min={1}
+                type="number"
+                value={form.manualMinutesPerDocument}
+                onChange={(event) =>
+                  updateField(
+                    "manualMinutesPerDocument",
+                    Number(event.target.value),
+                  )
+                }
               />
-              <div className="economics-stack">
-                <div className="economic-line">
-                  <span>Current monthly cost</span>
-                  <strong>{currencyFormatter.format(selectedResult.monthlyCurrentCost)}</strong>
-                </div>
-                <div className="economic-line">
-                  <span>AI monthly cost</span>
-                  <strong>{currencyFormatter.format(selectedResult.monthlyAiCost)}</strong>
-                </div>
-                <div className="economic-line economic-line--highlight">
-                  <span>Estimated monthly savings</span>
-                  <strong>{currencyFormatter.format(selectedResult.monthlySavings)}</strong>
-                </div>
-                <div className="economic-line">
-                  <span>Payback period</span>
-                  <strong>
-                    {Number.isFinite(selectedResult.paybackMonths)
-                      ? `${selectedResult.paybackMonths.toFixed(1)} months`
-                      : "No payback"}
-                  </strong>
-                </div>
-              </div>
-            </div>
+            </label>
 
-            <div className="solid-card">
-              <SectionTitle
-                eyebrow="Recommendation"
-                title="Should the capability proceed?"
-                subtitle="Technical readiness alone is not enough if the deployment case does not make commercial sense."
+            <label className="field">
+              <span>Hourly rate</span>
+              <input
+                min={20}
+                type="number"
+                value={form.reviewHourlyRate}
+                onChange={(event) =>
+                  updateField("reviewHourlyRate", Number(event.target.value))
+                }
               />
-              <div className="decision-card">
-                <span className={`signal signal--${decisionTone}`}>
-                  {selectedResult.deploymentDecision}
-                </span>
-                <strong>
-                  {selectedResult.monthlySavings > 0
-                    ? "The current business case is positive."
-                    : "The current business case is weak."}
-                </strong>
-                <p>
-                  {selectedResult.monthlySavings > 0
-                    ? `Projected savings cover the implementation cost in ${selectedResult.paybackMonths.toFixed(1)} months.`
-                    : "Operational savings do not currently offset implementation and review costs."}
-                </p>
-              </div>
+            </label>
+
+            <label className="field">
+              <span>Maintenance</span>
+              <input
+                min={0}
+                type="number"
+                value={form.maintenanceCost}
+                onChange={(event) =>
+                  updateField("maintenanceCost", Number(event.target.value))
+                }
+              />
+            </label>
+
+            <label className="field">
+              <span>Implementation</span>
+              <input
+                min={0}
+                type="number"
+                value={form.implementationCost}
+                onChange={(event) =>
+                  updateField("implementationCost", Number(event.target.value))
+                }
+              />
+            </label>
+
+            <label className="field">
+              <span>Payback target</span>
+              <input
+                min={1}
+                type="number"
+                value={form.paybackTargetMonths}
+                onChange={(event) =>
+                  updateField("paybackTargetMonths", Number(event.target.value))
+                }
+              />
+            </label>
+          </div>
+        </article>
+
+        <article className="panel">
+          <div className="panel-head panel-head--stack">
+            <span className="panel-title">Configuration</span>
+            <div className="tab-row">
+              {results.map((result) => (
+                <button
+                  key={result.config.id}
+                  className={`tab-button ${
+                    selectedResult.config.id === result.config.id
+                      ? "tab-button--active"
+                      : ""
+                  }`}
+                  onClick={() => setSelectedConfigId(result.config.id)}
+                  type="button"
+                >
+                  {result.config.label}
+                </button>
+              ))}
             </div>
-          </section>
-        )}
+          </div>
+
+          <div className="stat-stack">
+            <div className="stat-line">
+              <span>Current</span>
+              <strong>{currencyFormatter.format(selectedResult.monthlyCurrentCost)}</strong>
+            </div>
+            <div className="stat-line">
+              <span>AI</span>
+              <strong>{currencyFormatter.format(selectedResult.monthlyAiCost)}</strong>
+            </div>
+            <div className="stat-line stat-line--accent">
+              <span>Savings</span>
+              <strong>{currencyFormatter.format(selectedResult.monthlySavings)}</strong>
+            </div>
+            <div className="stat-line">
+              <span>Payback</span>
+              <strong>{formatMonths(selectedResult.paybackMonths)}</strong>
+            </div>
+          </div>
+        </article>
+      </section>
+    </>
+  );
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">A</div>
+          <div>
+            <span className="brand-label">Thesis MVP</span>
+            <strong>Capability Lab</strong>
+          </div>
+        </div>
+
+        <div className="workspace-chip">
+          <span>Document Summarisation</span>
+          <strong>{champion.readinessScore.toFixed(1)}</strong>
+        </div>
+
+        {navGroups.map((group) => (
+          <div key={group.label} className="nav-group">
+            <span className="nav-group__label">{group.label}</span>
+            {group.items.map((item) => (
+              <button
+                key={item.id}
+                className={`sidebar-link ${
+                  activeView === item.id ? "sidebar-link--active" : ""
+                }`}
+                onClick={() => setActiveView(item.id)}
+                type="button"
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        ))}
+
+        <div className="sidebar-footer">
+          <DecisionPill label={champion.deploymentDecision} tone={championTone} />
+          <span>{champion.config.name}</span>
+        </div>
+      </aside>
+
+      <main className="workspace">
+        {activeView === "home" && renderHome()}
+        {activeView === "setup" && renderSetup()}
+        {activeView === "scenarios" && renderScenarios()}
+        {activeView === "economics" && renderEconomics()}
       </main>
     </div>
   );
