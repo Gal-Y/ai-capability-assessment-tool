@@ -67,6 +67,21 @@ Deploy:
 npm run infra:deploy
 ```
 
+## GitHub Actions Deploy
+
+The repository now includes `.github/workflows/deploy.yml`.
+
+- pushes to `main` deploy the primary stack: `AiCapabilityAssessmentToolStack`
+- pull requests targeting `main` deploy a preview stack: `AiCapabilityAssessmentToolPr<PR_NUMBER>`
+- when a PR is closed, its preview stack is destroyed
+
+Set these GitHub repository values before using the workflow:
+
+- repository variable `AWS_REGION`
+- repository secret `AWS_ROLE_TO_ASSUME`
+
+The AWS role should trust GitHub Actions OIDC for this repository and allow CDK deployment permissions.
+
 ### API Endpoints
 
 - `POST /uploads/presign`

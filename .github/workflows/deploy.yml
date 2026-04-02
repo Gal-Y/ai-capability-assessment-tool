@@ -1,0 +1,100 @@
+name: Deploy AWS MVP
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Resolve stack target
+        id: target
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            echo "stack_id=AiCapabilityAssessmentToolStack" >> "$GITHUB_OUTPUT"
+            echo "stack_name=AiCapabilityAssessmentToolStack" >> "$GITHUB_OUTPUT"
+            echo "action=deploy" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event.action }}" == "closed" ]]; then
+            echo "stack_id=AiCapabilityAssessmentToolPr${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "stack_name=AiCapabilityAssessmentToolPr${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "action=destroy" >> "$GITHUB_OUTPUT"
+          else
+            echo "stack_id=AiCapabilityAssessmentToolPr${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "stack_name=AiCapabilityAssessmentToolPr${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "action=deploy" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Synthesize CDK
+        env:
+          CDK_STACK_ID: ${{ steps.target.outputs.stack_id }}
+          CDK_STACK_NAME: ${{ steps.target.outputs.stack_name }}
+        run: npm run infra:synth
+
+      - name: Deploy stack
+        if: steps.target.outputs.action == 'deploy'
+        env:
+          CDK_STACK_ID: ${{ steps.target.outputs.stack_id }}
+          CDK_STACK_NAME: ${{ steps.target.outputs.stack_name }}
+        run: npm run infra:deploy -- --require-approval never $CDK_STACK_ID
+
+      - name: Check preview stack
+        if: steps.target.outputs.action == 'destroy'
+        id: preview
+        shell: bash
+        run: |
+          if aws cloudformation describe-stacks --stack-name "${{ steps.target.outputs.stack_name }}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Destroy preview stack
+        if: steps.target.outputs.action == 'destroy' && steps.preview.outputs.exists == 'true'
+        env:
+          CDK_STACK_ID: ${{ steps.target.outputs.stack_id }}
+          CDK_STACK_NAME: ${{ steps.target.outputs.stack_name }}
+        run: npx cdk destroy --force $CDK_STACK_ID
