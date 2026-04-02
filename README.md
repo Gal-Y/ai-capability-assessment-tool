@@ -77,10 +77,11 @@ The repository now includes `.github/workflows/deploy.yml`.
 
 Set these GitHub repository values before using the workflow:
 
-- repository variable `AWS_REGION`
-- repository secret `AWS_ROLE_TO_ASSUME`
+- repository secret `AWS_ACCESS_KEY_ID`
+- repository secret `AWS_SECRET_ACCESS_KEY`
+- repository secret `AWS_REGION`
 
-The AWS role should trust GitHub Actions OIDC for this repository and allow CDK deployment permissions.
+These credentials should belong to a dedicated IAM user for deployment and allow CDK deployment permissions.
 
 ### API Endpoints
 
