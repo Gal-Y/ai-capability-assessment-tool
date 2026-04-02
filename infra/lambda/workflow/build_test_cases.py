@@ -1,0 +1,38 @@
+from common import now_iso, write_artifact
+
+
+def handler(event, _context):
+    test_cases = []
+    reference_outputs = event.get("referenceOutputs", [])
+    policy_files = event.get("policyFiles", [])
+    ai_outputs = event.get("aiOutputs", [])
+
+    for index, document in enumerate(event.get("documents", []), start=1):
+        mapped_output = ai_outputs[index - 1] if index - 1 < len(ai_outputs) else None
+        reference_output = (
+            reference_outputs[index - 1]
+            if index - 1 < len(reference_outputs)
+            else reference_outputs[0]
+        )
+        test_cases.append(
+            {
+                "caseId": f"case-{index:03d}",
+                "sourceDocuments": [document],
+                "referenceOutputs": [reference_output] if reference_output else [],
+                "policyFiles": policy_files,
+                "uploadedOutput": mapped_output,
+            }
+        )
+
+    payload = {
+        "builtAt": now_iso(),
+        "testCaseCount": len(test_cases),
+        "testCases": test_cases,
+    }
+    test_case_key = write_artifact(event, "workflow/test-cases.json", payload)
+
+    return {
+        **event,
+        "testCases": test_cases,
+        "testCaseArtifactKey": test_case_key,
+    }

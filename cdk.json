@@ -1,0 +1,3 @@
+{
+  "app": "npx tsx --tsconfig infra/tsconfig.json infra/bin/ai-capability-assessment-tool.ts"
+}
