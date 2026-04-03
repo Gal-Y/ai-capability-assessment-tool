@@ -1,17 +1,37 @@
-import { useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type KeyboardEvent,
+} from "react";
 import { defaultCapabilityForm } from "./data/mockData";
+import {
+  getEvaluation,
+  listEvaluations,
+  startEvaluation,
+  uploadLocalFiles,
+  type RemoteEvaluation,
+  type RemoteFileRef,
+  type UploadedFileResult,
+} from "./lib/api";
 import type { RiskLevel } from "./types";
 
 type ViewId = "home" | "new-evaluation" | "results";
 type StepId = 1 | 2 | 3 | 4 | 5 | 6;
 type Decision = "Ready" | "Conditional" | "Not Ready";
-type Tone = "good" | "warn" | "bad";
+type EvaluationStatus = "RUNNING" | "COMPLETED" | "FAILED";
+type Tone = "good" | "warn" | "bad" | "neutral";
 type OutputSource = "platform-model" | "uploaded-outputs";
+type UploadFieldKey = "documents" | "referenceOutputs" | "policyFiles" | "aiOutputs";
 
 type UploadItem = {
   name: string;
   sizeLabel: string;
   typeLabel: string;
+  key?: string;
+  file?: File;
 };
 
 type EvaluationDraft = {
@@ -21,9 +41,13 @@ type EvaluationDraft = {
   referenceOutputs: UploadItem[];
   policyFiles: UploadItem[];
   aiOutputs: UploadItem[];
+  requiredSections: string[];
+  excludedContent: string[];
+  policyText: string;
+  redactSensitiveContent: boolean;
   audience: string;
   outputStyle: string;
-  maxWords: number;
+  maxWords: string;
   riskLevel: RiskLevel;
   modelId: string;
   promptPreset: string;
@@ -32,8 +56,9 @@ type EvaluationDraft = {
 };
 
 type EvaluationRecord = {
-  id: number;
+  id: string;
   createdAt: string;
+  status: EvaluationStatus;
   capability: string;
   outputSource: OutputSource;
   documentCount: number;
@@ -46,13 +71,13 @@ type EvaluationRecord = {
   riskLevel: RiskLevel;
   modelId: string | null;
   promptPreset: string | null;
-  readinessScore: number;
-  decision: Decision;
+  readinessScore: number | null;
+  decision: Decision | null;
   metrics: {
-    faithfulness: number;
-    coverage: number;
-    compliance: number;
-    privacy: number;
+    faithfulness: number | null;
+    coverage: number | null;
+    compliance: number | null;
+    privacy: number | null;
     latency: number | null;
   };
   costPerDocument: number | null;
@@ -74,11 +99,29 @@ const modelProfiles: Record<
   "Claude 3.7 Sonnet": { quality: 2.7, latency: 3.6, costPerDocument: 0.029 },
 };
 
+const requiredSectionOptions = [
+  "Key points",
+  "Risks",
+  "Actions",
+  "Deadlines",
+  "Decisions",
+  "Escalations",
+];
+
+const excludedContentOptions = [
+  "PII",
+  "Employee names",
+  "Account IDs",
+  "Legal advice",
+  "Speculation",
+  "Confidential annexes",
+];
+
 const stepItems: Array<{ id: StepId; label: string }> = [
   { id: 1, label: "Capability" },
   { id: 2, label: "Output" },
   { id: 3, label: "Documents" },
-  { id: 4, label: "Truth Pack" },
+  { id: 4, label: "Truth & Rules" },
   { id: 5, label: "Configure" },
   { id: 6, label: "Review" },
 ];
@@ -90,9 +133,13 @@ const initialDraft = (): EvaluationDraft => ({
   referenceOutputs: [],
   policyFiles: [],
   aiOutputs: [],
+  requiredSections: defaultCapabilityForm.requiredSections,
+  excludedContent: defaultCapabilityForm.excludedContent.split(",").map((item) => item.trim()),
+  policyText: "",
+  redactSensitiveContent: true,
   audience: "",
   outputStyle: defaultCapabilityForm.summaryStyle,
-  maxWords: defaultCapabilityForm.outputLength,
+  maxWords: String(defaultCapabilityForm.outputLength),
   riskLevel: defaultCapabilityForm.riskLevel,
   modelId: "GPT-4.1 Mini",
   promptPreset: "Balanced",
@@ -119,11 +166,30 @@ const toSizeLabel = (size: number) =>
 const toUploadItems = (files: FileList | null): UploadItem[] =>
   files
     ? Array.from(files).map((file) => ({
+        file,
         name: file.name,
         sizeLabel: toSizeLabel(file.size),
         typeLabel: file.type || "File",
       }))
     : [];
+
+const uploadItemKey = (file: UploadItem) =>
+  file.key ?? `${file.name}-${file.sizeLabel}-${file.typeLabel}`;
+
+const mergeUploadItems = (current: UploadItem[], next: UploadItem[]) => {
+  const items = new Map(current.map((item) => [uploadItemKey(item), item]));
+
+  next.forEach((item) => {
+    items.set(uploadItemKey(item), item);
+  });
+
+  return Array.from(items.values());
+};
+
+const toggleSelection = (current: string[], value: string) =>
+  current.includes(value)
+    ? current.filter((item) => item !== value)
+    : [...current, value];
 
 const parseOptionalNumber = (value: string) => {
   const parsed = Number(value);
@@ -131,13 +197,102 @@ const parseOptionalNumber = (value: string) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
+const parseWordLimit = (value: string) => {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const toTitleCase = (value: string) =>
+  value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const getTypeLabelFromName = (name: string) => {
+  const extension = name.split(".").pop()?.trim();
+
+  return extension ? extension.toUpperCase() : "Uploaded";
+};
+
+const mapRemoteFile = (file: RemoteFileRef): UploadItem => ({
+  key: file.key,
+  name: file.name,
+  sizeLabel: "Uploaded",
+  typeLabel: getTypeLabelFromName(file.name),
+});
+
+const normalizeCapability = (capability: string) =>
+  capability === "document_summarisation"
+    ? "Document summarisation"
+    : toTitleCase(capability);
+
+const toEvaluationStatus = (status: string): EvaluationStatus =>
+  status === "COMPLETED" || status === "FAILED" ? status : "RUNNING";
+
+const sortEvaluations = (items: EvaluationRecord[]) =>
+  [...items].sort(
+    (left, right) =>
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+  );
+
+const upsertEvaluation = (
+  current: EvaluationRecord[],
+  next: EvaluationRecord,
+): EvaluationRecord[] => sortEvaluations([next, ...current.filter((item) => item.id !== next.id)]);
+
+const mapRemoteEvaluation = (evaluation: RemoteEvaluation): EvaluationRecord => ({
+  id: evaluation.evaluationId,
+  createdAt: evaluation.createdAt,
+  status: toEvaluationStatus(evaluation.status),
+  capability: normalizeCapability(evaluation.capability),
+  outputSource: evaluation.outputSource,
+  documentCount: evaluation.documentCount ?? evaluation.documents.length,
+  referenceCount: evaluation.referenceCount ?? evaluation.referenceOutputs.length,
+  policyCount: evaluation.policyCount ?? evaluation.policyFiles.length,
+  outputCount:
+    evaluation.outputCount ??
+    (evaluation.outputSource === "uploaded-outputs"
+      ? evaluation.aiOutputs.length
+      : evaluation.documents.length),
+  audience: evaluation.config?.audience ?? "",
+  outputStyle: evaluation.config?.outputStyle ?? "Executive brief",
+  maxWords: evaluation.config?.maxWords ?? defaultCapabilityForm.outputLength,
+  riskLevel: (evaluation.config?.riskLevel as RiskLevel | undefined) ?? "High",
+  modelId:
+    evaluation.outputSource === "platform-model"
+      ? evaluation.config?.modelId ?? "GPT-4.1 Mini"
+      : null,
+  promptPreset:
+    evaluation.outputSource === "platform-model"
+      ? evaluation.config?.promptPreset ?? "Balanced"
+      : null,
+  readinessScore: evaluation.result?.readinessScore ?? null,
+  decision: evaluation.result?.decision ?? null,
+  metrics: {
+    faithfulness: evaluation.result?.metrics.faithfulness ?? null,
+    coverage: evaluation.result?.metrics.coverage ?? null,
+    compliance: evaluation.result?.metrics.compliance ?? null,
+    privacy: evaluation.result?.metrics.privacy ?? null,
+    latency: evaluation.result?.metrics.latency ?? null,
+  },
+  costPerDocument: evaluation.result?.costPerDocument ?? null,
+  issues: evaluation.result?.issues ?? [],
+  documents: evaluation.documents.map(mapRemoteFile),
+  referenceOutputs: evaluation.referenceOutputs.map(mapRemoteFile),
+  policyFiles: evaluation.policyFiles.map(mapRemoteFile),
+  aiOutputs: evaluation.aiOutputs.map(mapRemoteFile),
+});
+
 const formatPercent = (value: number) => `${value.toFixed(1)}%`;
 const formatCurrency = (value: number | null) =>
   value === null ? "Not provided" : `$${value.toFixed(3)}`;
 const formatLatency = (value: number | null) =>
   value === null ? "Not provided" : `${value.toFixed(1)}s`;
 
-const getTone = (decision: Decision): Tone => {
+const getTone = (decision: Decision | null, status: EvaluationStatus): Tone => {
+  if (status !== "COMPLETED" || decision === null) {
+    return "neutral";
+  }
   if (decision === "Ready") {
     return "good";
   }
@@ -148,10 +303,75 @@ const getTone = (decision: Decision): Tone => {
   return "bad";
 };
 
+const getDecisionLabel = (evaluation: EvaluationRecord) =>
+  evaluation.status === "COMPLETED"
+    ? evaluation.decision ?? "Completed"
+    : evaluation.status === "FAILED"
+      ? "Failed"
+      : "Running";
+
+const createPendingEvaluation = (
+  evaluationId: string,
+  draft: EvaluationDraft,
+  uploadedFiles: UploadedFileResult[],
+): EvaluationRecord => {
+  const groupedFiles = {
+    documents: uploadedFiles
+      .filter((file) => file.category === "documents")
+      .map((file) => ({ key: file.key, name: file.name })),
+    referenceOutputs: uploadedFiles
+      .filter((file) => file.category === "referenceOutputs")
+      .map((file) => ({ key: file.key, name: file.name })),
+    policyFiles: uploadedFiles
+      .filter((file) => file.category === "policyFiles")
+      .map((file) => ({ key: file.key, name: file.name })),
+    aiOutputs: uploadedFiles
+      .filter((file) => file.category === "aiOutputs")
+      .map((file) => ({ key: file.key, name: file.name })),
+  };
+
+  return {
+    id: evaluationId,
+    createdAt: new Date().toISOString(),
+    status: "RUNNING",
+    capability: draft.capability,
+    outputSource: draft.outputSource ?? "platform-model",
+    documentCount: groupedFiles.documents.length,
+    referenceCount: groupedFiles.referenceOutputs.length,
+    policyCount: groupedFiles.policyFiles.length,
+    outputCount:
+      draft.outputSource === "uploaded-outputs"
+        ? groupedFiles.aiOutputs.length
+        : groupedFiles.documents.length,
+    audience: draft.audience,
+    outputStyle: draft.outputStyle,
+    maxWords: parseWordLimit(draft.maxWords) ?? defaultCapabilityForm.outputLength,
+    riskLevel: draft.riskLevel,
+    modelId: draft.outputSource === "platform-model" ? draft.modelId : null,
+    promptPreset: draft.outputSource === "platform-model" ? draft.promptPreset : null,
+    readinessScore: null,
+    decision: null,
+    metrics: {
+      faithfulness: null,
+      coverage: null,
+      compliance: null,
+      privacy: null,
+      latency: null,
+    },
+    costPerDocument: null,
+    issues: [],
+    documents: groupedFiles.documents.map(mapRemoteFile),
+    referenceOutputs: groupedFiles.referenceOutputs.map(mapRemoteFile),
+    policyFiles: groupedFiles.policyFiles.map(mapRemoteFile),
+    aiOutputs: groupedFiles.aiOutputs.map(mapRemoteFile),
+  };
+};
+
 const simulateEvaluation = (
   draft: EvaluationDraft,
   evaluationIndex: number,
 ): EvaluationRecord => {
+  const maxWords = parseWordLimit(draft.maxWords) ?? defaultCapabilityForm.outputLength;
   const seed = [
     draft.capability,
     draft.outputSource,
@@ -159,9 +379,13 @@ const simulateEvaluation = (
     draft.referenceOutputs.map((file) => file.name).join("|"),
     draft.policyFiles.map((file) => file.name).join("|"),
     draft.aiOutputs.map((file) => file.name).join("|"),
+    draft.requiredSections.join("|"),
+    draft.excludedContent.join("|"),
+    draft.redactSensitiveContent ? "redact" : "allow",
+    draft.policyText,
     draft.audience,
     draft.outputStyle,
-    draft.maxWords,
+    maxWords,
     draft.riskLevel,
     draft.modelId,
     draft.promptPreset,
@@ -171,6 +395,9 @@ const simulateEvaluation = (
   const docBoost = Math.min(draft.documents.length * 2.4, 10);
   const referenceBoost = Math.min(draft.referenceOutputs.length * 3.1, 9.3);
   const policyBoost = Math.min(draft.policyFiles.length * 1.8, 4.5);
+  const sectionBoost = Math.min(draft.requiredSections.length * 0.7, 4.2);
+  const excludedBoost = Math.min(draft.excludedContent.length * 0.55, 3.4);
+  const policyTextBoost = draft.policyText.trim() ? 1.4 : 0;
   const outputCoverageRatio =
     draft.outputSource === "uploaded-outputs"
       ? Math.min(1, draft.aiOutputs.length / Math.max(1, draft.documents.length))
@@ -202,6 +429,7 @@ const simulateEvaluation = (
       docBoost * 0.45 +
       referenceBoost * 1.05 +
       policyBoost * 0.35 +
+      sectionBoost * 0.25 +
       (modelProfile?.quality ?? 1.6) +
       outputCoverageRatio * 2.6 -
       riskPenalty * 0.32 +
@@ -214,8 +442,9 @@ const simulateEvaluation = (
     79 +
       docBoost * 0.88 +
       referenceBoost * 0.52 +
+      sectionBoost * 0.58 +
       outputCoverageRatio * 6 -
-      (draft.maxWords < 140 ? 4.2 : 0) +
+      (maxWords < 140 ? 4.2 : 0) +
       jitter(seed, 2),
     68,
     99,
@@ -225,6 +454,7 @@ const simulateEvaluation = (
     84 +
       styleBoost * 1.05 +
       policyBoost * 0.72 +
+      sectionBoost * 0.82 +
       promptBoost +
       audienceBoost -
       riskPenalty * 0.15 +
@@ -237,6 +467,9 @@ const simulateEvaluation = (
     87 +
       referenceBoost * 0.35 +
       policyBoost * 1.15 +
+      excludedBoost +
+      policyTextBoost +
+      (draft.redactSensitiveContent ? 1.25 : -1.8) +
       (modelProfile?.quality ?? 1.6) * 0.4 -
       riskPenalty * 0.48 +
       jitter(seed, 4),
@@ -251,7 +484,7 @@ const simulateEvaluation = (
           (modelProfile?.latency ?? 2.8) +
             draft.documents.length * 0.52 +
             draft.referenceOutputs.length * 0.12 +
-            (draft.maxWords > 260 ? 0.4 : 0),
+            (maxWords > 260 ? 0.4 : 0),
           1.8,
           8.2,
         )
@@ -288,8 +521,14 @@ const simulateEvaluation = (
   if (privacy < thresholds.privacy) {
     issues.push("Add stronger handling for sensitive enterprise content.");
   }
+  if (!draft.redactSensitiveContent) {
+    issues.push("Enable sensitive-content redaction before deployment.");
+  }
   if (draft.referenceOutputs.length < 1) {
     issues.push("Upload at least one reference output.");
+  }
+  if (draft.requiredSections.length < 2) {
+    issues.push("Define at least two required sections for the summary.");
   }
   if (
     draft.outputSource === "uploaded-outputs" &&
@@ -317,8 +556,9 @@ const simulateEvaluation = (
   }
 
   return {
-    id: evaluationIndex,
+    id: String(evaluationIndex),
     createdAt: new Date().toISOString(),
+    status: "COMPLETED",
     capability: draft.capability,
     outputSource: draft.outputSource ?? "platform-model",
     documentCount: draft.documents.length,
@@ -330,7 +570,7 @@ const simulateEvaluation = (
         : draft.documents.length,
     audience: draft.audience,
     outputStyle: draft.outputStyle,
-    maxWords: draft.maxWords,
+    maxWords,
     riskLevel: draft.riskLevel,
     modelId: draft.outputSource === "platform-model" ? draft.modelId : null,
     promptPreset:
@@ -414,7 +654,7 @@ const FileListColumn = ({
     <span className="panel-label">{label}</span>
     {files.length > 0 ? (
       files.map((file) => (
-        <div key={`${label}-${file.name}`} className="file-row">
+        <div key={`${label}-${uploadItemKey(file)}`} className="file-row">
           <span>{file.name}</span>
           <span>{file.sizeLabel}</span>
         </div>
@@ -425,13 +665,172 @@ const FileListColumn = ({
   </div>
 );
 
+const UploadDropzone = ({
+  title,
+  hint,
+  acceptLabel,
+  files,
+  compact = false,
+  showEmptyList = false,
+  loadedLabel = "loaded",
+  onAppend,
+  onRemove,
+  onClear,
+}: {
+  title: string;
+  hint: string;
+  acceptLabel: string;
+  files: UploadItem[];
+  compact?: boolean;
+  showEmptyList?: boolean;
+  loadedLabel?: string;
+  onAppend: (files: FileList | null) => void;
+  onRemove: (file: UploadItem) => void;
+  onClear: () => void;
+}) => {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [isDragActive, setIsDragActive] = useState(false);
+
+  const openPicker = () => {
+    inputRef.current?.click();
+  };
+
+  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
+    onAppend(event.target.files);
+    event.target.value = "";
+  };
+
+  const handleDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragActive(true);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragActive(true);
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+
+    if (event.currentTarget === event.target) {
+      setIsDragActive(false);
+    }
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragActive(false);
+    onAppend(event.dataTransfer.files);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openPicker();
+    }
+  };
+
+  return (
+    <section className="upload-dropzone-stack">
+      <div
+        className={`upload-dropzone ${compact ? "upload-dropzone--compact" : ""} ${
+          isDragActive ? "upload-dropzone--drag" : files.length > 0 ? "upload-dropzone--filled" : ""
+        }`}
+        onClick={openPicker}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        onKeyDown={handleKeyDown}
+        role="button"
+        tabIndex={0}
+      >
+        <input hidden multiple onChange={handleChange} ref={inputRef} type="file" />
+
+        <div className="upload-dropzone__icon">{files.length > 0 ? files.length : "+"}</div>
+
+        <div className="upload-dropzone__body">
+          <span className="panel-label">{title}</span>
+          <strong>
+            {isDragActive
+              ? "Drop files here"
+              : files.length > 0
+                ? `${files.length} file${files.length === 1 ? "" : "s"} selected`
+                : hint}
+          </strong>
+          <span>{acceptLabel}</span>
+        </div>
+
+        <div className="upload-dropzone__actions">
+          <span className="upload-dropzone__chip">
+            {files.length > 0 ? "Add more" : "Browse"}
+          </span>
+        </div>
+      </div>
+
+      {files.length > 0 || showEmptyList ? (
+        <div className="upload-files">
+          <div className="upload-files__head">
+            <span>{files.length > 0 ? `${files.length} ${loadedLabel}` : "Awaiting files"}</span>
+            {files.length > 0 ? (
+              <button
+                className="ghost-button upload-file-row__remove"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onClear();
+                }}
+                type="button"
+              >
+                Clear all
+              </button>
+            ) : null}
+          </div>
+
+          {files.length > 0 ? (
+            files.map((file) => (
+              <div className="upload-file-row" key={`${title}-${uploadItemKey(file)}`}>
+                <div className="upload-file-row__body">
+                  <strong>{file.name}</strong>
+                  <span>
+                    {file.typeLabel} · {file.sizeLabel}
+                  </span>
+                </div>
+                <button
+                  className="ghost-button upload-file-row__remove"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onRemove(file);
+                  }}
+                  type="button"
+                >
+                  Remove
+                </button>
+              </div>
+            ))
+          ) : (
+            <div className="upload-empty-row">No files added</div>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+};
+
 function App() {
   const [view, setView] = useState<ViewId>("home");
   const [step, setStep] = useState<StepId>(1);
   const [draft, setDraft] = useState<EvaluationDraft>(initialDraft);
   const [evaluations, setEvaluations] = useState<EvaluationRecord[]>([]);
+  const [selectedEvaluationId, setSelectedEvaluationId] = useState<string | null>(null);
+  const [isLoadingEvaluations, setIsLoadingEvaluations] = useState(true);
+  const [isSubmittingEvaluation, setIsSubmittingEvaluation] = useState(false);
+  const [pollingEvaluationId, setPollingEvaluationId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const lastEvaluation = evaluations[0];
+  const selectedEvaluation =
+    evaluations.find((evaluation) => evaluation.id === selectedEvaluationId) ?? null;
+  const lastEvaluation = selectedEvaluation ?? evaluations[0] ?? null;
   const evaluatedCapabilityCount = new Set(
     evaluations.map((evaluation) => evaluation.capability),
   ).size;
@@ -447,7 +846,7 @@ function App() {
             ? draft.referenceOutputs.length > 0
             : step === 5
               ? draft.audience.trim().length > 0 &&
-                draft.maxWords > 0 &&
+                (parseWordLimit(draft.maxWords) ?? 0) > 0 &&
                 (draft.outputSource === "platform-model"
                   ? draft.modelId.trim().length > 0
                   : draft.aiOutputs.length > 0)
@@ -463,9 +862,47 @@ function App() {
     }));
   };
 
+  const appendDraftFiles = (key: UploadFieldKey, files: FileList | null) => {
+    const nextFiles = toUploadItems(files);
+
+    if (nextFiles.length === 0) {
+      return;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      [key]: mergeUploadItems(current[key], nextFiles),
+    }));
+  };
+
+  const removeDraftFile = (key: UploadFieldKey, file: UploadItem) => {
+    setDraft((current) => ({
+      ...current,
+      [key]: current[key].filter((item) => uploadItemKey(item) !== uploadItemKey(file)),
+    }));
+  };
+
+  const clearDraftFiles = (key: UploadFieldKey) => {
+    setDraft((current) => ({
+      ...current,
+      [key]: [],
+    }));
+  };
+
+  const toggleDraftSelection = (
+    key: "requiredSections" | "excludedContent",
+    value: string,
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      [key]: toggleSelection(current[key], value),
+    }));
+  };
+
   const openNewEvaluation = () => {
     setDraft(initialDraft());
     setStep(1);
+    setStatusMessage(null);
     setView("new-evaluation");
   };
 
@@ -481,11 +918,172 @@ function App() {
     }
   };
 
-  const runEvaluation = () => {
-    const result = simulateEvaluation(draft, evaluations.length + 1);
+  useEffect(() => {
+    let isMounted = true;
 
-    setEvaluations((current) => [result, ...current]);
+    const loadEvaluations = async () => {
+      try {
+        const response = await listEvaluations();
+
+        if (!isMounted) {
+          return;
+        }
+
+        const nextEvaluations = sortEvaluations(
+          response.evaluations.map(mapRemoteEvaluation),
+        );
+
+        setEvaluations(nextEvaluations);
+        setSelectedEvaluationId((current) => current ?? nextEvaluations[0]?.id ?? null);
+      } catch (error) {
+        if (isMounted) {
+          setStatusMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load evaluations from AWS.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingEvaluations(false);
+        }
+      }
+    };
+
+    void loadEvaluations();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const pollEvaluation = async (evaluationId: string) => {
+    setPollingEvaluationId(evaluationId);
+
+    try {
+      const response = await getEvaluation(evaluationId);
+      const nextEvaluation = mapRemoteEvaluation(response.evaluation);
+
+      setEvaluations((current) => upsertEvaluation(current, nextEvaluation));
+      setSelectedEvaluationId(evaluationId);
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to refresh the evaluation status.",
+      );
+    } finally {
+      setPollingEvaluationId((current) =>
+        current === evaluationId ? null : current,
+      );
+    }
+  };
+
+  useEffect(() => {
+    if (!lastEvaluation || lastEvaluation.status !== "RUNNING") {
+      return;
+    }
+
+    if (pollingEvaluationId === lastEvaluation.id) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void pollEvaluation(lastEvaluation.id);
+    }, 2400);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [lastEvaluation, pollingEvaluationId]);
+
+  const runEvaluation = async () => {
+    if (draft.outputSource === null) {
+      return;
+    }
+
+    setIsSubmittingEvaluation(true);
+    setStatusMessage(null);
     setView("results");
+
+    try {
+      const uploadSources = [
+        ...draft.documents
+          .filter((item): item is UploadItem & { file: File } => Boolean(item.file))
+          .map((item) => ({ category: "documents" as const, file: item.file })),
+        ...draft.referenceOutputs
+          .filter((item): item is UploadItem & { file: File } => Boolean(item.file))
+          .map((item) => ({ category: "referenceOutputs" as const, file: item.file })),
+        ...draft.policyFiles
+          .filter((item): item is UploadItem & { file: File } => Boolean(item.file))
+          .map((item) => ({ category: "policyFiles" as const, file: item.file })),
+        ...draft.aiOutputs
+          .filter((item): item is UploadItem & { file: File } => Boolean(item.file))
+          .map((item) => ({ category: "aiOutputs" as const, file: item.file })),
+      ];
+
+      const uploadResponse = await uploadLocalFiles(uploadSources);
+      const groupedFiles = {
+        documents: uploadResponse.uploadedFiles
+          .filter((file) => file.category === "documents")
+          .map((file) => ({ name: file.name, key: file.key })),
+        referenceOutputs: uploadResponse.uploadedFiles
+          .filter((file) => file.category === "referenceOutputs")
+          .map((file) => ({ name: file.name, key: file.key })),
+        policyFiles: uploadResponse.uploadedFiles
+          .filter((file) => file.category === "policyFiles")
+          .map((file) => ({ name: file.name, key: file.key })),
+        aiOutputs: uploadResponse.uploadedFiles
+          .filter((file) => file.category === "aiOutputs")
+          .map((file) => ({ name: file.name, key: file.key })),
+      };
+
+      const evaluationResponse = await startEvaluation({
+        capability: "document_summarisation",
+        outputSource: draft.outputSource,
+        documents: groupedFiles.documents,
+        referenceOutputs: groupedFiles.referenceOutputs,
+        policyFiles: groupedFiles.policyFiles,
+        aiOutputs: groupedFiles.aiOutputs,
+        config: {
+          audience: draft.audience,
+          outputStyle: draft.outputStyle,
+          maxWords: parseWordLimit(draft.maxWords) ?? defaultCapabilityForm.outputLength,
+          riskLevel: draft.riskLevel,
+          requiredSections: draft.requiredSections,
+          excludedContent: draft.excludedContent,
+          redactSensitiveContent: draft.redactSensitiveContent,
+          policyText: draft.policyText.trim(),
+          modelId: draft.outputSource === "platform-model" ? draft.modelId : undefined,
+          promptPreset:
+            draft.outputSource === "platform-model" ? draft.promptPreset : undefined,
+          providedLatencySeconds:
+            draft.outputSource === "uploaded-outputs"
+              ? draft.providedLatencySeconds.trim() || undefined
+              : undefined,
+          providedCostPerDocument:
+            draft.outputSource === "uploaded-outputs"
+              ? draft.providedCostPerDocument.trim() || undefined
+              : undefined,
+        },
+      });
+
+      const pendingEvaluation = createPendingEvaluation(
+        evaluationResponse.evaluationId,
+        draft,
+        uploadResponse.uploadedFiles,
+      );
+
+      setEvaluations((current) => upsertEvaluation(current, pendingEvaluation));
+      setSelectedEvaluationId(evaluationResponse.evaluationId);
+      setStatusMessage("Evaluation started. Results will appear when the workflow completes.");
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "Unable to start the evaluation.",
+      );
+    } finally {
+      setIsSubmittingEvaluation(false);
+    }
   };
 
   const renderHome = () => (
@@ -521,11 +1119,15 @@ function App() {
                   dateStyle: "medium",
                   timeStyle: "short",
                 }).format(new Date(lastEvaluation.createdAt))
-              : "None"
+              : isLoadingEvaluations
+                ? "Loading"
+                : "None"
           }
           meta="Most recent run"
         />
       </section>
+
+      {statusMessage ? <div className="status-banner">{statusMessage}</div> : null}
 
       <section className="content-grid">
         <article className="panel feature-panel">
@@ -533,8 +1135,8 @@ function App() {
             <span className="panel-title">Last evaluation</span>
             {lastEvaluation ? (
               <DecisionPill
-                label={lastEvaluation.decision}
-                tone={getTone(lastEvaluation.decision)}
+                label={getDecisionLabel(lastEvaluation)}
+                tone={getTone(lastEvaluation.decision, lastEvaluation.status)}
               />
             ) : null}
           </div>
@@ -559,13 +1161,21 @@ function App() {
               </div>
               <div>
                 <span className="detail-label">Readiness</span>
-                <strong>{lastEvaluation.readinessScore.toFixed(1)}</strong>
+                <strong>
+                  {lastEvaluation.readinessScore === null
+                    ? getDecisionLabel(lastEvaluation)
+                    : lastEvaluation.readinessScore.toFixed(1)}
+                </strong>
               </div>
             </div>
           ) : (
             <div className="empty-state">
-              <strong>No evaluations yet</strong>
-              <span>Start your first capability assessment.</span>
+              <strong>{isLoadingEvaluations ? "Loading evaluations" : "No evaluations yet"}</strong>
+              <span>
+                {isLoadingEvaluations
+                  ? "Pulling deployed runs from AWS."
+                  : "Start your first capability assessment."}
+              </span>
             </div>
           )}
         </article>
@@ -584,24 +1194,28 @@ function App() {
                 <span>Score</span>
               </div>
               {evaluations.slice(0, 5).map((evaluation) => (
-                <div key={evaluation.id} className="table__row">
-                  <span>{evaluation.capability}</span>
-                  <span>
-                    {evaluation.outputSource === "platform-model"
-                      ? "Platform model"
-                      : "Uploaded outputs"}
-                  </span>
-                  <DecisionPill
-                    label={evaluation.decision}
-                    tone={getTone(evaluation.decision)}
+              <div key={evaluation.id} className="table__row">
+                <span>{evaluation.capability}</span>
+                <span>
+                  {evaluation.outputSource === "platform-model"
+                    ? "Platform model"
+                    : "Uploaded outputs"}
+                </span>
+                <DecisionPill
+                    label={getDecisionLabel(evaluation)}
+                    tone={getTone(evaluation.decision, evaluation.status)}
                   />
-                  <strong>{evaluation.readinessScore.toFixed(1)}</strong>
+                  <strong>
+                    {evaluation.readinessScore === null
+                      ? "Pending"
+                      : evaluation.readinessScore.toFixed(1)}
+                  </strong>
                 </div>
               ))}
             </div>
           ) : (
             <div className="empty-state empty-state--small">
-              <span>Nothing to show yet.</span>
+              <span>{isLoadingEvaluations ? "Loading runs..." : "Nothing to show yet."}</span>
             </div>
           )}
         </article>
@@ -669,22 +1283,32 @@ function App() {
         <span className="panel-title">Upload documents</span>
       </div>
 
-      <label className="upload-card">
-        <input
-          hidden
-          multiple
-          type="file"
-          onChange={(event) => updateDraft("documents", toUploadItems(event.target.files))}
+      <div className="upload-layout">
+        <UploadDropzone
+          acceptLabel="PDF, DOCX, TXT, MD"
+          files={draft.documents}
+          hint="Drag & drop source documents"
+          loadedLabel="documents loaded"
+          onAppend={(files) => appendDraftFiles("documents", files)}
+          onClear={() => clearDraftFiles("documents")}
+          onRemove={(file) => removeDraftFile("documents", file)}
+          title="Source documents"
         />
-        <div>
-          <span className="upload-card__label">Source documents</span>
-          <strong>{draft.documents.length} files</strong>
-        </div>
-        <span className="upload-card__meta">PDF, DOCX, TXT, MD</span>
-      </label>
+      </div>
 
-      <div className="file-columns">
-        <FileListColumn label="Documents" files={draft.documents} />
+      <div className="upload-metrics">
+        <div className="upload-metric-card">
+          <span className="panel-label">Selected</span>
+          <strong>{draft.documents.length}</strong>
+        </div>
+        <div className="upload-metric-card">
+          <span className="panel-label">Cases</span>
+          <strong>{draft.documents.length}</strong>
+        </div>
+        <div className="upload-metric-card">
+          <span className="panel-label">Mapping</span>
+          <strong>1 doc = 1 case</strong>
+        </div>
       </div>
     </article>
   );
@@ -692,46 +1316,140 @@ function App() {
   const renderTruthPackStep = () => (
     <article className="panel flow-panel">
       <div className="panel-header">
-        <span className="panel-title">Upload source of truth</span>
+        <span className="panel-title">Source of truth and rules</span>
       </div>
 
-      <div className="option-grid">
-        <label className="upload-card">
-          <input
-            hidden
-            multiple
-            type="file"
-            onChange={(event) =>
-              updateDraft("referenceOutputs", toUploadItems(event.target.files))
-            }
-          />
-          <div>
-            <span className="upload-card__label">Reference outputs</span>
-            <strong>{draft.referenceOutputs.length} files</strong>
-          </div>
-          <span className="upload-card__meta">Required</span>
-        </label>
+      <div className="truth-layout">
+        <div className="truth-top-grid">
+          <section className="rules-card rules-card--compact">
+            <div className="panel-header">
+              <span className="panel-title">Reference outputs</span>
+            </div>
+            <UploadDropzone
+              acceptLabel="PDF, DOCX, TXT, MD"
+              compact
+              files={draft.referenceOutputs}
+              hint="Drop approved reference outputs"
+              loadedLabel="references loaded"
+              onAppend={(files) => appendDraftFiles("referenceOutputs", files)}
+              onClear={() => clearDraftFiles("referenceOutputs")}
+              onRemove={(file) => removeDraftFile("referenceOutputs", file)}
+              title="Gold summaries"
+            />
+          </section>
 
-        <label className="upload-card">
-          <input
-            hidden
-            multiple
-            type="file"
-            onChange={(event) =>
-              updateDraft("policyFiles", toUploadItems(event.target.files))
-            }
-          />
-          <div>
-            <span className="upload-card__label">Rules / policies</span>
-            <strong>{draft.policyFiles.length} files</strong>
-          </div>
-          <span className="upload-card__meta">Optional</span>
-        </label>
-      </div>
+          <section className="rules-card rules-card--compact">
+            <div className="panel-header">
+              <span className="panel-title">Policy guidance</span>
+            </div>
 
-      <div className="file-columns">
-        <FileListColumn label="Reference outputs" files={draft.referenceOutputs} />
-        <FileListColumn label="Rules / policies" files={draft.policyFiles} />
+            <div className="policy-stack">
+              <UploadDropzone
+                acceptLabel="PDF, DOCX, TXT, MD"
+                compact
+                files={draft.policyFiles}
+                hint="Drop governance or policy files"
+                loadedLabel="policy files loaded"
+                onAppend={(files) => appendDraftFiles("policyFiles", files)}
+                onClear={() => clearDraftFiles("policyFiles")}
+                onRemove={(file) => removeDraftFile("policyFiles", file)}
+                title="Policy files"
+              />
+
+              <label className="field field--plain policy-text-field">
+                <span>Rule text</span>
+                <textarea
+                  className="policy-textarea"
+                  placeholder="Enter additional rules, compliance notes, or organisation-specific summarisation constraints."
+                  value={draft.policyText}
+                  onChange={(event) => updateDraft("policyText", event.target.value)}
+                />
+              </label>
+            </div>
+          </section>
+        </div>
+
+        <section className="rules-card rules-card--wide">
+          <div className="panel-header">
+            <span className="panel-title">Deterministic rules</span>
+          </div>
+
+          <div className="rules-control-grid">
+            <label className="field rule-field">
+              <span>Word limit</span>
+              <input
+                inputMode="numeric"
+                pattern="[0-9]*"
+                placeholder="220"
+                type="text"
+                value={draft.maxWords}
+                onChange={(event) =>
+                  updateDraft("maxWords", event.target.value.replace(/[^\d]/g, ""))
+                }
+              />
+            </label>
+
+            <div className="field rule-field">
+              <span>Sensitive content</span>
+              <div className="toggle-row">
+                <button
+                  className={`toggle-card ${
+                    draft.redactSensitiveContent ? "toggle-card--active" : ""
+                  }`}
+                  onClick={() => updateDraft("redactSensitiveContent", true)}
+                  type="button"
+                >
+                  Redact
+                </button>
+                <button
+                  className={`toggle-card ${
+                    !draft.redactSensitiveContent ? "toggle-card--active" : ""
+                  }`}
+                  onClick={() => updateDraft("redactSensitiveContent", false)}
+                  type="button"
+                >
+                  Allow
+                </button>
+              </div>
+            </div>
+
+            <div className="field rule-field rule-field--wide">
+              <span>Required sections</span>
+              <div className="chip-row">
+                {requiredSectionOptions.map((section) => (
+                  <button
+                    key={section}
+                    className={`chip-button ${
+                      draft.requiredSections.includes(section) ? "chip-button--active" : ""
+                    }`}
+                    onClick={() => toggleDraftSelection("requiredSections", section)}
+                    type="button"
+                  >
+                    {section}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="field rule-field rule-field--wide">
+              <span>Exclude</span>
+              <div className="chip-row">
+                {excludedContentOptions.map((rule) => (
+                  <button
+                    key={rule}
+                    className={`chip-button ${
+                      draft.excludedContent.includes(rule) ? "chip-button--active" : ""
+                    }`}
+                    onClick={() => toggleDraftSelection("excludedContent", rule)}
+                    type="button"
+                  >
+                    {rule}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
     </article>
   );
@@ -789,17 +1507,6 @@ function App() {
             </select>
           </label>
 
-          <label className="field">
-            <span>Max words</span>
-            <input
-              min={80}
-              max={500}
-              type="number"
-              value={draft.maxWords}
-              onChange={(event) => updateDraft("maxWords", Number(event.target.value))}
-            />
-          </label>
-
           <div className="field field--wide">
             <span>Risk level</span>
             <div className="chip-row">
@@ -820,21 +1527,17 @@ function App() {
         </div>
       ) : (
         <div className="form-grid">
-          <label className="upload-card upload-card--full">
-            <input
-              hidden
-              multiple
-              type="file"
-              onChange={(event) =>
-                updateDraft("aiOutputs", toUploadItems(event.target.files))
-              }
+          <div className="field field--wide field--plain">
+            <UploadDropzone
+              acceptLabel="PDF, DOCX, TXT, MD"
+              files={draft.aiOutputs}
+              hint="Drop generated AI summaries"
+              onAppend={(files) => appendDraftFiles("aiOutputs", files)}
+              onClear={() => clearDraftFiles("aiOutputs")}
+              onRemove={(file) => removeDraftFile("aiOutputs", file)}
+              title="Uploaded AI outputs"
             />
-            <div>
-              <span className="upload-card__label">Uploaded AI outputs</span>
-              <strong>{draft.aiOutputs.length} files</strong>
-            </div>
-            <span className="upload-card__meta">One output per document</span>
-          </label>
+          </div>
 
           <label className="field">
             <span>Average latency (optional)</span>
@@ -877,17 +1580,6 @@ function App() {
               <option>Operational digest</option>
               <option>Board-ready briefing</option>
             </select>
-          </label>
-
-          <label className="field">
-            <span>Max words</span>
-            <input
-              min={80}
-              max={500}
-              type="number"
-              value={draft.maxWords}
-              onChange={(event) => updateDraft("maxWords", Number(event.target.value))}
-            />
           </label>
 
           <div className="field field--wide">
@@ -941,7 +1633,7 @@ function App() {
         </div>
         <div className="review-card">
           <span className="panel-label">Rules / policies</span>
-          <strong>{draft.policyFiles.length}</strong>
+          <strong>{draft.policyFiles.length + (draft.policyText.trim() ? 1 : 0)}</strong>
         </div>
         <div className="review-card">
           <span className="panel-label">
@@ -958,8 +1650,20 @@ function App() {
           <strong>{draft.outputStyle}</strong>
         </div>
         <div className="review-card">
+          <span className="panel-label">Word limit</span>
+          <strong>{draft.maxWords}</strong>
+        </div>
+        <div className="review-card">
           <span className="panel-label">Risk</span>
           <strong>{draft.riskLevel}</strong>
+        </div>
+        <div className="review-card">
+          <span className="panel-label">Required sections</span>
+          <strong>{draft.requiredSections.length}</strong>
+        </div>
+        <div className="review-card">
+          <span className="panel-label">Excluded items</span>
+          <strong>{draft.excludedContent.length}</strong>
         </div>
       </div>
     </article>
@@ -1002,7 +1706,7 @@ function App() {
       <section className="wizard-actions">
         <button
           className="ghost-button"
-          disabled={step === 1}
+          disabled={step === 1 || isSubmittingEvaluation}
           onClick={goBack}
           type="button"
         >
@@ -1012,7 +1716,7 @@ function App() {
         {step < 6 ? (
           <button
             className="primary-button"
-            disabled={!stepReady}
+            disabled={!stepReady || isSubmittingEvaluation}
             onClick={goNext}
             type="button"
           >
@@ -1021,11 +1725,11 @@ function App() {
         ) : (
           <button
             className="primary-button"
-            disabled={!stepReady}
+            disabled={!stepReady || isSubmittingEvaluation}
             onClick={runEvaluation}
             type="button"
           >
-            Run evaluation
+            {isSubmittingEvaluation ? "Starting..." : "Run evaluation"}
           </button>
         )}
       </section>
@@ -1044,17 +1748,87 @@ function App() {
         </button>
       </header>
 
+      {statusMessage ? <div className="status-banner">{statusMessage}</div> : null}
+
       {lastEvaluation ? (
-        <>
+        lastEvaluation.status !== "COMPLETED" ? (
+          <>
+            <section className="card-grid">
+              <SummaryCard
+                label="Status"
+                value={getDecisionLabel(lastEvaluation)}
+                meta="Workflow state"
+              />
+              <SummaryCard
+                label="Evaluation ID"
+                value={lastEvaluation.id}
+                meta="Tracked in AWS"
+              />
+              <SummaryCard
+                label="Output source"
+                value={
+                  lastEvaluation.outputSource === "platform-model"
+                    ? "Platform model"
+                    : "Uploaded outputs"
+                }
+                meta={`${lastEvaluation.documentCount} source docs`}
+              />
+              <SummaryCard
+                label="Started"
+                value={new Intl.DateTimeFormat("en-AU", {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                }).format(new Date(lastEvaluation.createdAt))}
+                meta="Most recent update"
+              />
+            </section>
+
+            <section className="content-grid">
+              <article className="panel feature-panel">
+                <div className="empty-state">
+                  <strong>Evaluation in progress</strong>
+                  <span>
+                    Files are uploaded and the Step Functions workflow is running.
+                  </span>
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="panel-header">
+                  <span className="panel-title">Current setup</span>
+                </div>
+                <div className="detail-grid">
+                  <div>
+                    <span className="detail-label">Audience</span>
+                    <strong>{lastEvaluation.audience || "Not set"}</strong>
+                  </div>
+                  <div>
+                    <span className="detail-label">Output style</span>
+                    <strong>{lastEvaluation.outputStyle}</strong>
+                  </div>
+                  <div>
+                    <span className="detail-label">Risk</span>
+                    <strong>{lastEvaluation.riskLevel}</strong>
+                  </div>
+                  <div>
+                    <span className="detail-label">Documents</span>
+                    <strong>{lastEvaluation.documentCount}</strong>
+                  </div>
+                </div>
+              </article>
+            </section>
+          </>
+        ) : (
+          <>
           <section className="card-grid">
             <SummaryCard
               label="Decision"
-              value={lastEvaluation.decision}
+              value={lastEvaluation.decision ?? "Completed"}
               meta="Overall outcome"
             />
             <SummaryCard
               label="Readiness"
-              value={lastEvaluation.readinessScore.toFixed(1)}
+              value={lastEvaluation.readinessScore?.toFixed(1) ?? "—"}
               meta="Composite score"
             />
             <SummaryCard
@@ -1082,31 +1856,42 @@ function App() {
               <div className="panel-header">
                 <span className="panel-title">Metrics</span>
                 <DecisionPill
-                  label={lastEvaluation.decision}
-                  tone={getTone(lastEvaluation.decision)}
+                  label={getDecisionLabel(lastEvaluation)}
+                  tone={getTone(lastEvaluation.decision, lastEvaluation.status)}
                 />
               </div>
 
-              <MetricRail
-                label="Faithfulness"
-                value={lastEvaluation.metrics.faithfulness}
-                target={thresholds.faithfulness}
-              />
-              <MetricRail
-                label="Coverage"
-                value={lastEvaluation.metrics.coverage}
-                target={thresholds.coverage}
-              />
-              <MetricRail
-                label="Compliance"
-                value={lastEvaluation.metrics.compliance}
-                target={thresholds.compliance}
-              />
-              <MetricRail
-                label="Privacy"
-                value={lastEvaluation.metrics.privacy}
-                target={thresholds.privacy}
-              />
+              {lastEvaluation.metrics.faithfulness !== null &&
+              lastEvaluation.metrics.coverage !== null &&
+              lastEvaluation.metrics.compliance !== null &&
+              lastEvaluation.metrics.privacy !== null ? (
+                <>
+                  <MetricRail
+                    label="Faithfulness"
+                    value={lastEvaluation.metrics.faithfulness}
+                    target={thresholds.faithfulness}
+                  />
+                  <MetricRail
+                    label="Coverage"
+                    value={lastEvaluation.metrics.coverage}
+                    target={thresholds.coverage}
+                  />
+                  <MetricRail
+                    label="Compliance"
+                    value={lastEvaluation.metrics.compliance}
+                    target={thresholds.compliance}
+                  />
+                  <MetricRail
+                    label="Privacy"
+                    value={lastEvaluation.metrics.privacy}
+                    target={thresholds.privacy}
+                  />
+                </>
+              ) : (
+                <div className="issue-item issue-item--neutral">
+                  Metric results have not been written yet.
+                </div>
+              )}
 
               {lastEvaluation.metrics.latency === null ? (
                 <div className="issue-item issue-item--neutral">
@@ -1185,7 +1970,8 @@ function App() {
               </div>
             </article>
           </section>
-        </>
+          </>
+        )
       ) : (
         <article className="panel feature-panel">
           <div className="empty-state">
