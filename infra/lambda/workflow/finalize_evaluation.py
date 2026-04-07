@@ -22,6 +22,7 @@ def handler(event, _context):
         event["evaluationId"],
         {
             "status": "COMPLETED",
+            "workflowStage": "COMPLETED",
             "updatedAt": completion_time,
             "documentCount": len(event.get("documents", [])),
             "referenceCount": len(event.get("referenceOutputs", [])),

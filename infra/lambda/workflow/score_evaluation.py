@@ -1,6 +1,6 @@
 from collections import Counter
 
-from common import now_iso, to_input_file_item, write_artifact
+from common import now_iso, to_input_file_item, update_evaluation_item, write_artifact
 from openai_client import DEFAULT_EVALUATOR_MODEL, create_response, parse_json_output
 
 
@@ -212,6 +212,15 @@ def build_decision(metrics):
 
 
 def handler(event, _context):
+    update_evaluation_item(
+        event["evaluationId"],
+        {
+            "status": "RUNNING",
+            "workflowStage": "SCORING",
+            "updatedAt": now_iso(),
+        },
+    )
+
     config = event.get("config", {})
     policy_text = str(config.get("policyText", "")).strip()
     evaluator_model = config.get("evaluatorModel") or DEFAULT_EVALUATOR_MODEL

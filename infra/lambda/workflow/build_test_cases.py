@@ -1,7 +1,16 @@
-from common import now_iso, write_artifact
+from common import now_iso, update_evaluation_item, write_artifact
 
 
 def handler(event, _context):
+    update_evaluation_item(
+        event["evaluationId"],
+        {
+            "status": "RUNNING",
+            "workflowStage": "BUILDING_CASES",
+            "updatedAt": now_iso(),
+        },
+    )
+
     test_cases = []
     reference_outputs = event.get("referenceOutputs", [])
     policy_files = event.get("policyFiles", [])

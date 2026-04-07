@@ -44,6 +44,7 @@ def handler(event, _context):
         "createdAt": now,
         "updatedAt": now,
         "status": "RUNNING",
+        "workflowStage": "QUEUED",
         "capability": capability,
         "outputSource": output_source,
         "documents": documents,
@@ -79,5 +80,6 @@ def handler(event, _context):
         {
             "evaluationId": evaluation_id,
             "status": "RUNNING",
+            "workflowStage": "QUEUED",
         },
     )

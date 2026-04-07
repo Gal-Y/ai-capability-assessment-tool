@@ -18,6 +18,7 @@ def handler(event, _context):
         event["evaluationId"],
         {
             "status": "FAILED",
+            "workflowStage": "FAILED",
             "updatedAt": failure_time,
             "error": message,
             "resultArtifactKey": failure_key,

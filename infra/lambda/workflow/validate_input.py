@@ -1,7 +1,16 @@
-from common import now_iso, write_artifact
+from common import now_iso, update_evaluation_item, write_artifact
 
 
 def handler(event, _context):
+    update_evaluation_item(
+        event["evaluationId"],
+        {
+            "status": "RUNNING",
+            "workflowStage": "VALIDATING_INPUT",
+            "updatedAt": now_iso(),
+        },
+    )
+
     output_source = event.get("outputSource")
     documents = event.get("documents", [])
     reference_outputs = event.get("referenceOutputs", [])

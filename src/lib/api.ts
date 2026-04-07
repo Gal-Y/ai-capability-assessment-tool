@@ -26,6 +26,7 @@ export type RemoteEvaluation = {
   createdAt: string;
   updatedAt?: string;
   status: string;
+  workflowStage?: string;
   error?: string;
   capability: string;
   outputSource: OutputSource;
@@ -155,6 +156,11 @@ export const listEvaluations = () =>
 
 export const getEvaluation = (evaluationId: string) =>
   requestJson<{ evaluation: RemoteEvaluation }>(`/evaluations/${evaluationId}`);
+
+export const deleteEvaluation = (evaluationId: string) =>
+  requestJson<{ status: string }>("/evaluations/" + evaluationId, {
+    method: "DELETE",
+  });
 
 export const startEvaluation = (payload: StartEvaluationPayload) =>
   requestJson<{ evaluationId: string; status: string }>("/evaluations", {

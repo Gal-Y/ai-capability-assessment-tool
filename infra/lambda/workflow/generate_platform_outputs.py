@@ -1,4 +1,4 @@
-from common import now_iso, to_input_file_item, write_artifact
+from common import now_iso, to_input_file_item, update_evaluation_item, write_artifact
 from openai_client import create_response, extract_output_text
 
 
@@ -51,6 +51,15 @@ def build_generation_content(test_case, policy_text):
 
 
 def handler(event, _context):
+    update_evaluation_item(
+        event["evaluationId"],
+        {
+            "status": "RUNNING",
+            "workflowStage": "GENERATING_OUTPUTS",
+            "updatedAt": now_iso(),
+        },
+    )
+
     config = event.get("config", {})
     policy_text = str(config.get("policyText", "")).strip()
     model_id = config.get("modelId", "gpt-5.4-mini")

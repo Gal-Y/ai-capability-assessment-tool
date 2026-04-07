@@ -153,6 +153,16 @@ export class AiCapabilityAssessmentToolStack extends Stack {
       },
     );
 
+    const deleteEvaluationFn = createPythonFunction(
+      "DeleteEvaluationFunction",
+      "delete_evaluation.handler",
+      apiLambdaCode,
+      {
+        EVALUATIONS_TABLE: evaluationsTable.tableName,
+        ARTIFACTS_BUCKET: artifactsBucket.bucketName,
+      },
+    );
+
     const validateInputFn = createPythonFunction(
       "ValidateInputFunction",
       "validate_input.handler",
@@ -318,6 +328,8 @@ export class AiCapabilityAssessmentToolStack extends Stack {
     evaluationsTable.grantReadWriteData(startEvaluationFn);
     evaluationsTable.grantReadWriteData(finalizeEvaluationFn);
     evaluationsTable.grantReadWriteData(markFailedFn);
+    evaluationsTable.grantReadWriteData(deleteEvaluationFn);
+    artifactsBucket.grantReadWrite(deleteEvaluationFn);
     stateMachine.grantStartExecution(startEvaluationFn);
 
     const httpApi = new apigwv2.HttpApi(this, "AiCapabilityAssessmentApi", {
@@ -362,6 +374,15 @@ export class AiCapabilityAssessmentToolStack extends Stack {
       integration: new apigwv2Integrations.HttpLambdaIntegration(
         "GetEvaluationIntegration",
         getEvaluationFn,
+      ),
+    });
+
+    httpApi.addRoutes({
+      path: "/evaluations/{evaluationId}",
+      methods: [apigwv2.HttpMethod.DELETE],
+      integration: new apigwv2Integrations.HttpLambdaIntegration(
+        "DeleteEvaluationIntegration",
+        deleteEvaluationFn,
       ),
     });
 
