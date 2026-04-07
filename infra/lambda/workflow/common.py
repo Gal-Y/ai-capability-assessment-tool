@@ -1,10 +1,14 @@
 import base64
 import hashlib
+import io
 import json
 import mimetypes
 import os
+import re
+import zipfile
 from datetime import datetime, timezone
 from decimal import Decimal
+from xml.etree import ElementTree
 
 import boto3
 
@@ -60,6 +64,80 @@ def to_input_file_item(file_ref):
         "filename": uploaded["name"],
         "file_data": f"data:{uploaded['contentType']};base64,{encoded}",
     }
+
+
+def _truncate_text(value, max_chars):
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 1].rstrip() + "…"
+
+
+def _decode_text_bytes(value):
+    for encoding in ("utf-8", "utf-16", "latin-1"):
+        try:
+            return value.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return value.decode("utf-8", errors="replace")
+
+
+def _extract_docx_text(file_bytes):
+    namespace = {
+        "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    }
+    paragraphs = []
+
+    with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+        xml_parts = sorted(
+            name
+            for name in archive.namelist()
+            if name == "word/document.xml"
+            or re.match(r"word/(header|footer)\d+\.xml$", name)
+        )
+
+        for part_name in xml_parts:
+            root = ElementTree.fromstring(archive.read(part_name))
+
+            for paragraph in root.findall(".//w:p", namespace):
+                chunks = []
+                for node in paragraph.iter():
+                    tag = node.tag.rsplit("}", 1)[-1]
+                    if tag == "t" and node.text:
+                        chunks.append(node.text)
+                    elif tag == "tab":
+                        chunks.append("\t")
+                    elif tag in {"br", "cr"}:
+                        chunks.append("\n")
+
+                text = "".join(chunks).strip()
+                if text:
+                    paragraphs.append(text)
+
+    return "\n\n".join(paragraphs)
+
+
+def extract_readable_text(file_ref, max_chars=6000):
+    uploaded = read_uploaded_file(file_ref)
+    name = uploaded["name"].lower()
+    content_type = uploaded["contentType"].lower()
+    text = None
+
+    if name.endswith(".docx") or (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        in content_type
+    ):
+        text = _extract_docx_text(uploaded["bytes"])
+    elif any(
+        name.endswith(extension)
+        for extension in (".txt", ".md", ".json", ".csv", ".xml", ".html")
+    ) or content_type.startswith("text/"):
+        text = _decode_text_bytes(uploaded["bytes"])
+
+    if text is None:
+        return None
+
+    normalized = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return _truncate_text(normalized, max_chars) if normalized else None
 
 
 def stable_noise(seed, salt):

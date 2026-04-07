@@ -2234,6 +2234,149 @@ button {
 }
 
 /* ============================================================
+   Case results
+   ============================================================ */
+.case-results {
+  display: grid;
+  gap: 18px;
+}
+
+.case-card {
+  display: grid;
+  gap: 18px;
+}
+
+.case-card__header {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.case-card__title {
+  display: grid;
+  gap: 6px;
+}
+
+.case-card__title strong {
+  font-size: 1.08rem;
+}
+
+.case-card__metrics,
+.case-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.case-card__metrics span,
+.case-card__meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.case-card__metrics span {
+  color: #dde1ea;
+}
+
+.case-card__meta span {
+  color: var(--text-muted);
+}
+
+.case-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.case-pane {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.case-pane__header {
+  display: grid;
+  gap: 6px;
+}
+
+.case-pane__header strong {
+  font-size: 0.96rem;
+  color: var(--text);
+}
+
+.case-pane__content {
+  min-height: 240px;
+  max-height: 420px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  background: rgba(6, 7, 12, 0.76);
+  overflow: auto;
+}
+
+.case-pane__content pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e6e9f0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.82rem;
+  line-height: 1.72;
+}
+
+.case-pane__empty {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.case-findings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.case-finding-group {
+  display: grid;
+  gap: 10px;
+}
+
+.case-finding-list {
+  display: grid;
+  gap: 8px;
+}
+
+.case-finding-item,
+.case-finding-empty {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.88rem;
+  line-height: 1.65;
+}
+
+.case-finding-item {
+  color: #d9dde7;
+}
+
+.case-finding-empty {
+  color: var(--text-muted);
+}
+
+/* ============================================================
    Capability guides
    ============================================================ */
 .guide-index-stack {
@@ -2525,6 +2668,8 @@ button {
   .content-grid,
   .upload-layout,
   .option-grid,
+  .case-compare,
+  .case-findings-grid,
   .file-columns,
   .review-grid,
   .form-grid,
@@ -2605,5 +2750,10 @@ button {
   .guide-doc__body {
     padding-left: 22px;
     padding-right: 22px;
+  }
+
+  .case-pane__content {
+    min-height: 180px;
+    max-height: none;
   }
 }

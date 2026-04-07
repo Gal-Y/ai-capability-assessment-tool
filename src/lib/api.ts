@@ -79,6 +79,7 @@ export type RemoteEvaluation = {
       caseId: string;
       sourceDocument: string;
       referenceOutput?: string | null;
+      referenceText?: string | null;
       candidateSummary: string;
       source: OutputSource;
       modelId?: string | null;

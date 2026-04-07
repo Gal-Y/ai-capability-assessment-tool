@@ -1,6 +1,12 @@
 from collections import Counter
 
-from common import now_iso, to_input_file_item, update_evaluation_item, write_artifact
+from common import (
+    extract_readable_text,
+    now_iso,
+    to_input_file_item,
+    update_evaluation_item,
+    write_artifact,
+)
 from openai_client import DEFAULT_EVALUATOR_MODEL, create_response, parse_json_output
 
 
@@ -114,6 +120,16 @@ def normalize_case_scores(raw_scores):
         name: max(0, min(100, value))
         for name, value in scores.items()
     }
+
+
+def get_reference_text(test_case):
+    if not test_case.get("referenceOutputs"):
+        return None
+
+    try:
+        return extract_readable_text(test_case["referenceOutputs"][0])
+    except Exception:
+        return None
 
 
 def build_case_content(test_case, resolved_output, policy_text):
@@ -298,6 +314,7 @@ def handler(event, _context):
                     if test_case.get("referenceOutputs")
                     else None
                 ),
+                "referenceText": get_reference_text(test_case),
                 "candidateSummary": evaluation["candidateSummary"].strip(),
                 "source": resolved_output["source"],
                 "modelId": resolved_output.get("modelId"),
