@@ -1070,6 +1070,25 @@ button {
   color: var(--text);
 }
 
+.field select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 48px;
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none'%3E%3Cpath d='M3 5.25L7 9.25L11 5.25' stroke='%23959aa7' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat, no-repeat;
+  background-position: center, right 14px center;
+  background-size: auto, 14px 14px;
+  cursor: pointer;
+}
+
+.field select:hover {
+  border-color: var(--border-strong);
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
 .field input:focus,
 .field select:focus,
 .policy-textarea:focus {

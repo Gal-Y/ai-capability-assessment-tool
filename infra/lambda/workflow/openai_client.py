@@ -5,9 +5,13 @@ import urllib.error
 import urllib.request
 
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_API_BASE_URL = os.environ.get("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
-DEFAULT_EVALUATOR_MODEL = os.environ.get("OPENAI_EVALUATOR_MODEL", "gpt-5.4-mini")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+OPENAI_API_BASE_URL = os.environ.get(
+    "OPENAI_API_BASE_URL", "https://api.openai.com/v1"
+).strip()
+DEFAULT_EVALUATOR_MODEL = os.environ.get(
+    "OPENAI_EVALUATOR_MODEL", "gpt-5.4-mini"
+).strip()
 
 
 def extract_output_text(response_payload):
