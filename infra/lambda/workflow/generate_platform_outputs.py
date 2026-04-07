@@ -2,11 +2,7 @@ from common import now_iso, to_input_file_item, update_evaluation_item, write_ar
 from openai_client import create_response, extract_output_text
 
 
-GENERATION_INSTRUCTIONS = """You generate concise enterprise-ready summaries from source documents.
-
-Use only information supported by the source document and any supplied policy guidance.
-Do not invent facts, hedge with unsupported claims, or mention the evaluation setup.
-Return the final summary text only, with no markdown code fences or extra commentary."""
+GENERATION_INSTRUCTIONS = "summarise this document"
 
 
 def build_generation_content(test_case, policy_text):
