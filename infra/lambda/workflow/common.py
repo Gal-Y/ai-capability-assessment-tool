@@ -66,8 +66,8 @@ def to_input_file_item(file_ref):
     }
 
 
-def _truncate_text(value, max_chars):
-    if len(value) <= max_chars:
+def _truncate_text(value, max_chars=None):
+    if max_chars is None or max_chars <= 0 or len(value) <= max_chars:
         return value
     return value[: max_chars - 1].rstrip() + "…"
 
@@ -116,7 +116,7 @@ def _extract_docx_text(file_bytes):
     return "\n\n".join(paragraphs)
 
 
-def extract_readable_text(file_ref, max_chars=6000):
+def extract_readable_text(file_ref, max_chars=None):
     uploaded = read_uploaded_file(file_ref)
     name = uploaded["name"].lower()
     content_type = uploaded["contentType"].lower()
