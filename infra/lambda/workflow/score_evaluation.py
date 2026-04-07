@@ -1,4 +1,5 @@
 from collections import Counter
+import re
 
 from common import (
     extract_readable_text,
@@ -21,6 +22,87 @@ THRESHOLDS = {
     "compliance": 90,
     "privacy": 96,
 }
+
+METRIC_WEIGHTS = {
+    "faithfulness": 0.35,
+    "coverage": 0.30,
+    "compliance": 0.20,
+    "privacy": 0.15,
+}
+
+JUDGE_WEIGHTS = {
+    "semantic": 0.70,
+    "deterministic": 0.30,
+}
+
+STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "against",
+    "also",
+    "annual",
+    "apply",
+    "approved",
+    "because",
+    "before",
+    "being",
+    "between",
+    "business",
+    "company",
+    "document",
+    "employee",
+    "employees",
+    "entitled",
+    "leave",
+    "manager",
+    "must",
+    "other",
+    "policy",
+    "request",
+    "requests",
+    "required",
+    "should",
+    "their",
+    "there",
+    "these",
+    "this",
+    "through",
+    "under",
+    "using",
+    "within",
+    "year",
+    "years",
+}
+
+NUMBER_WORDS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+}
+
+MONTH_PATTERN = (
+    r"january|february|march|april|may|june|july|august|september|october|"
+    r"november|december"
+)
 
 CASE_EVALUATION_SCHEMA = {
     "type": "object",
@@ -108,6 +190,17 @@ def dedupe_ordered(items, limit):
     return ordered
 
 
+def clamp_score(value):
+    return round(max(0.0, min(100.0, value)), 2)
+
+
+def weighted_metric_score(metrics):
+    return round(
+        sum(metrics[name] * METRIC_WEIGHTS[name] for name in METRIC_WEIGHTS),
+        2,
+    )
+
+
 def normalize_case_scores(raw_scores):
     scores = {
         "faithfulness": int(raw_scores["faithfulness"]),
@@ -149,6 +242,267 @@ def get_candidate_summary_text(test_case, resolved_output):
         extracted = None
 
     return extracted or "Candidate summary preview unavailable for this file type."
+
+
+def get_source_text(test_case):
+    try:
+        return extract_readable_text(test_case["sourceDocuments"][0]) or ""
+    except Exception:
+        return ""
+
+
+def get_policy_guidance_text(test_case, policy_text):
+    parts = []
+    for policy_file in test_case.get("policyFiles", []):
+        try:
+            extracted = extract_readable_text(policy_file)
+        except Exception:
+            extracted = None
+        if extracted:
+            parts.append(extracted)
+
+    if policy_text:
+        parts.append(policy_text)
+
+    return "\n\n".join(parts).strip()
+
+
+def tokenize_text(text):
+    return re.findall(r"[a-z][a-z0-9']+", text.lower())
+
+
+def extract_keyword_set(text, limit=18):
+    tokens = [
+        token
+        for token in tokenize_text(text)
+        if len(token) >= 4 and token not in STOPWORDS and not token.isdigit()
+    ]
+    counts = Counter(tokens)
+    return {
+        token
+        for token, _count in counts.most_common(limit)
+    }
+
+
+def normalize_number_token(token):
+    normalized = token.lower().strip()
+    if normalized in NUMBER_WORDS:
+        return str(NUMBER_WORDS[normalized])
+    return normalized
+
+
+def normalize_unit(unit):
+    normalized = unit.lower().strip()
+    replacements = {
+        "business day": "business_days",
+        "business days": "business_days",
+        "working day": "business_days",
+        "working days": "business_days",
+        "calendar day": "calendar_days",
+        "calendar days": "calendar_days",
+        "day": "days",
+        "week": "weeks",
+        "month": "months",
+        "year": "years",
+        "hour": "hours",
+        "minute": "minutes",
+        "percent": "%",
+    }
+    return replacements.get(normalized, normalized.replace(" ", "_"))
+
+
+def extract_numeric_facts(text):
+    lowered = text.lower()
+    facts = []
+    seen = set()
+
+    number_unit_pattern = re.compile(
+        r"\b(?P<value>\d+(?:\.\d+)?|"
+        + "|".join(NUMBER_WORDS.keys())
+        + r")\s+(?P<unit>business days?|working days?|calendar days?|days?|weeks?|months?|years?|hours?|minutes?|percent)\b"
+    )
+    percent_pattern = re.compile(r"\b(?P<value>\d+(?:\.\d+)?)\s*%")
+    date_pattern = re.compile(
+        rf"\b(?P<day>\d{{1,2}})\s+(?P<month>{MONTH_PATTERN})\s+(?P<year>\d{{4}})\b"
+    )
+
+    for pattern in (number_unit_pattern, percent_pattern):
+        for match in pattern.finditer(lowered):
+            value = normalize_number_token(match.group("value"))
+            unit = "%" if "%" in match.group(0) else normalize_unit(match.group("unit"))
+            key = f"{value}|{unit}"
+            if key in seen:
+                continue
+            seen.add(key)
+            facts.append(
+                {
+                    "key": key,
+                    "display": match.group(0).strip(),
+                }
+            )
+
+    for match in date_pattern.finditer(lowered):
+        key = f"{match.group('year')}-{match.group('month')}-{match.group('day')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        facts.append(
+            {
+                "key": key,
+                "display": match.group(0).strip(),
+            }
+        )
+
+    return facts
+
+
+def extract_policy_rules(policy_guidance_text):
+    lowered = policy_guidance_text.lower()
+    forbidden = []
+    required = []
+
+    forbidden_patterns = [
+        r"(?:do not|don't|avoid|exclude|never)\s+([^.\n;]+)",
+    ]
+    required_patterns = [
+        r"(?:must include|include|with sections for)\s+([^.\n;]+)",
+    ]
+
+    def normalize_rule_fragment(fragment):
+        fragment = re.sub(r"[^a-z0-9\s/-]", " ", fragment.lower())
+        tokens = [
+            token
+            for token in fragment.split()
+            if len(token) >= 3 and token not in STOPWORDS
+        ]
+        return " ".join(tokens[:5]).strip()
+
+    for pattern in forbidden_patterns:
+        for match in re.finditer(pattern, lowered):
+            phrase = normalize_rule_fragment(match.group(1))
+            if phrase:
+                forbidden.append(phrase)
+
+    for pattern in required_patterns:
+        for match in re.finditer(pattern, lowered):
+            phrase = normalize_rule_fragment(match.group(1))
+            if phrase:
+                required.append(phrase)
+
+    return {
+        "forbidden": dedupe_ordered(forbidden, 8),
+        "required": dedupe_ordered(required, 8),
+    }
+
+
+def detect_privacy_flags(text):
+    flags = []
+    patterns = {
+        "email address": r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b",
+        "phone number": r"(?:\+?\d[\d ()-]{7,}\d)",
+        "url": r"\b(?:https?://|www\.)\S+\b",
+        "long numeric identifier": r"\b\d{7,}\b",
+    }
+
+    for label, pattern in patterns.items():
+        if re.search(pattern, text, re.IGNORECASE):
+            flags.append(label)
+
+    return flags
+
+
+def build_deterministic_case_assessment(source_text, reference_text, candidate_text, policy_guidance_text):
+    source_facts = extract_numeric_facts(source_text)
+    reference_facts = extract_numeric_facts(reference_text)
+    candidate_facts = extract_numeric_facts(candidate_text)
+
+    source_fact_keys = {fact["key"] for fact in source_facts}
+    reference_fact_keys = {fact["key"] for fact in reference_facts}
+    candidate_fact_keys = {fact["key"] for fact in candidate_facts}
+
+    matched_source_facts = [
+        fact["display"] for fact in candidate_facts if fact["key"] in source_fact_keys
+    ]
+    unsupported_candidate_facts = [
+        fact["display"] for fact in candidate_facts if fact["key"] not in source_fact_keys
+    ]
+    missing_reference_facts = [
+        fact["display"] for fact in reference_facts if fact["key"] not in candidate_fact_keys
+    ]
+
+    reference_keywords = extract_keyword_set(reference_text)
+    candidate_keywords = set(tokenize_text(candidate_text))
+    matched_reference_keywords = sorted(reference_keywords & candidate_keywords)
+    missing_reference_keywords = sorted(reference_keywords - candidate_keywords)
+
+    policy_rules = extract_policy_rules(policy_guidance_text) if policy_guidance_text else {
+        "required": [],
+        "forbidden": [],
+    }
+    lowered_candidate = candidate_text.lower()
+    required_rule_misses = [
+        phrase for phrase in policy_rules["required"] if phrase and phrase not in lowered_candidate
+    ]
+    forbidden_rule_hits = [
+        phrase for phrase in policy_rules["forbidden"] if phrase and phrase in lowered_candidate
+    ]
+    privacy_flags = detect_privacy_flags(candidate_text)
+
+    if candidate_fact_keys:
+        fact_precision = len(matched_source_facts) / max(1, len(candidate_fact_keys))
+        faithfulness_score = 40 + (fact_precision * 60)
+    else:
+        faithfulness_score = 90
+
+    fact_recall = (
+        len(reference_fact_keys & candidate_fact_keys) / len(reference_fact_keys)
+        if reference_fact_keys
+        else 1.0
+    )
+    keyword_recall = (
+        len(matched_reference_keywords) / len(reference_keywords)
+        if reference_keywords
+        else 1.0
+    )
+    coverage_score = (fact_recall * 0.55 + keyword_recall * 0.45) * 100
+
+    if policy_rules["required"] or policy_rules["forbidden"]:
+        compliance_score = 100 - (18 * len(required_rule_misses)) - (22 * len(forbidden_rule_hits))
+    else:
+        compliance_score = 100
+
+    privacy_score = 100 - (24 * len(privacy_flags))
+
+    metrics = {
+        "faithfulness": clamp_score(faithfulness_score),
+        "coverage": clamp_score(coverage_score),
+        "compliance": clamp_score(compliance_score),
+        "privacy": clamp_score(privacy_score),
+    }
+
+    return {
+        "metrics": metrics,
+        "checks": {
+            "matchedSourceFacts": dedupe_ordered(matched_source_facts, 8),
+            "unsupportedCandidateFacts": dedupe_ordered(unsupported_candidate_facts, 8),
+            "missingReferenceFacts": dedupe_ordered(missing_reference_facts, 8),
+            "matchedReferenceKeywords": matched_reference_keywords[:10],
+            "missingReferenceKeywords": missing_reference_keywords[:10],
+            "requiredRuleMisses": dedupe_ordered(required_rule_misses, 8),
+            "forbiddenRuleHits": dedupe_ordered(forbidden_rule_hits, 8),
+            "privacyFlags": dedupe_ordered(privacy_flags, 8),
+        },
+    }
+
+
+def blend_metric_sets(semantic_metrics, deterministic_metrics):
+    return {
+        name: clamp_score(
+            semantic_metrics[name] * JUDGE_WEIGHTS["semantic"]
+            + deterministic_metrics[name] * JUDGE_WEIGHTS["deterministic"]
+        )
+        for name in METRIC_WEIGHTS
+    }
 
 
 def merge_usage(total_usage, usage):
@@ -289,13 +643,7 @@ def top_case_findings(case_results):
 
 
 def build_decision(metrics):
-    readiness_score = round(
-        metrics["faithfulness"] * 0.35
-        + metrics["coverage"] * 0.3
-        + metrics["compliance"] * 0.2
-        + metrics["privacy"] * 0.15,
-        2,
-    )
+    readiness_score = weighted_metric_score(metrics)
 
     passes = all(metrics[name] >= THRESHOLDS[name] for name in THRESHOLDS)
     near_pass = all(metrics[name] >= THRESHOLDS[name] - 4 for name in THRESHOLDS)
@@ -341,6 +689,11 @@ def handler(event, _context):
         if not resolved_output:
             raise ValueError(f"No resolved output found for {test_case['caseId']}")
 
+        source_text = get_source_text(test_case)
+        reference_text = get_reference_text(test_case) or ""
+        candidate_summary_text = get_candidate_summary_text(test_case, resolved_output)
+        policy_guidance_text = get_policy_guidance_text(test_case, policy_text)
+
         evaluation, case_latency_seconds, case_usage = score_case_with_retries(
             event,
             evaluator_model,
@@ -348,7 +701,15 @@ def handler(event, _context):
             resolved_output,
             policy_text,
         )
-        normalized_scores = normalize_case_scores(evaluation["scores"])
+        semantic_metrics = normalize_case_scores(evaluation["scores"])
+        deterministic_assessment = build_deterministic_case_assessment(
+            source_text,
+            reference_text,
+            candidate_summary_text,
+            policy_guidance_text,
+        )
+        deterministic_metrics = deterministic_assessment["metrics"]
+        hybrid_metrics = blend_metric_sets(semantic_metrics, deterministic_metrics)
 
         evaluation_latency_seconds += case_latency_seconds
         evaluation_input_tokens += int(case_usage["input_tokens"])
@@ -371,13 +732,14 @@ def handler(event, _context):
                     if test_case.get("referenceOutputs")
                     else None
                 ),
-                "referenceText": get_reference_text(test_case),
-                "candidateSummary": get_candidate_summary_text(
-                    test_case, resolved_output
-                ),
+                "referenceText": reference_text or None,
+                "candidateSummary": candidate_summary_text,
                 "source": resolved_output["source"],
                 "modelId": resolved_output.get("modelId"),
-                "metrics": normalized_scores,
+                "metrics": hybrid_metrics,
+                "semanticMetrics": semantic_metrics,
+                "deterministicMetrics": deterministic_metrics,
+                "deterministicChecks": deterministic_assessment["checks"],
                 "strengths": dedupe_ordered(evaluation["strengths"], 3),
                 "missingPoints": dedupe_ordered(evaluation["missingPoints"], 5),
                 "issues": dedupe_ordered(evaluation["issues"], 5),
@@ -391,6 +753,34 @@ def handler(event, _context):
             }
         )
 
+    semantic_metrics = {
+        "faithfulness": average(
+            [case["semanticMetrics"]["faithfulness"] for case in case_results]
+        ),
+        "coverage": average(
+            [case["semanticMetrics"]["coverage"] for case in case_results]
+        ),
+        "compliance": average(
+            [case["semanticMetrics"]["compliance"] for case in case_results]
+        ),
+        "privacy": average(
+            [case["semanticMetrics"]["privacy"] for case in case_results]
+        ),
+    }
+    deterministic_metrics = {
+        "faithfulness": average(
+            [case["deterministicMetrics"]["faithfulness"] for case in case_results]
+        ),
+        "coverage": average(
+            [case["deterministicMetrics"]["coverage"] for case in case_results]
+        ),
+        "compliance": average(
+            [case["deterministicMetrics"]["compliance"] for case in case_results]
+        ),
+        "privacy": average(
+            [case["deterministicMetrics"]["privacy"] for case in case_results]
+        ),
+    }
     metrics = {
         "faithfulness": average(
             [case["metrics"]["faithfulness"] for case in case_results]
@@ -405,6 +795,8 @@ def handler(event, _context):
         ),
     }
     decision, readiness_score = build_decision(metrics)
+    semantic_composite = weighted_metric_score(semantic_metrics)
+    deterministic_composite = weighted_metric_score(deterministic_metrics)
     issues, strengths = top_case_findings(case_results)
 
     if metrics["faithfulness"] < THRESHOLDS["faithfulness"]:
@@ -433,6 +825,20 @@ def handler(event, _context):
         "decision": decision,
         "readinessScore": readiness_score,
         "metrics": metrics,
+        "semanticMetrics": semantic_metrics,
+        "deterministicMetrics": deterministic_metrics,
+        "scoreBreakdown": {
+            "judgeWeights": JUDGE_WEIGHTS,
+            "metricWeights": METRIC_WEIGHTS,
+            "semanticComposite": semantic_composite,
+            "deterministicComposite": deterministic_composite,
+            "hybridComposite": readiness_score,
+            "formula": (
+                "hybrid_metric = 0.70 * semantic_metric + 0.30 * deterministic_metric; "
+                "final_score = 0.35 * faithfulness + 0.30 * coverage + "
+                "0.20 * compliance + 0.15 * privacy"
+            ),
+        },
         "issues": dedupe_ordered(issues, 6),
         "strengths": dedupe_ordered(strengths, 5),
         "evaluatorModel": evaluator_model,

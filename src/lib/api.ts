@@ -73,6 +73,34 @@ export type RemoteEvaluation = {
       privacy: number;
       latency: number | null;
     };
+    semanticMetrics?: {
+      faithfulness: number;
+      coverage: number;
+      compliance: number;
+      privacy: number;
+    };
+    deterministicMetrics?: {
+      faithfulness: number;
+      coverage: number;
+      compliance: number;
+      privacy: number;
+    };
+    scoreBreakdown?: {
+      judgeWeights: {
+        semantic: number;
+        deterministic: number;
+      };
+      metricWeights: {
+        faithfulness: number;
+        coverage: number;
+        compliance: number;
+        privacy: number;
+      };
+      semanticComposite: number;
+      deterministicComposite: number;
+      hybridComposite: number;
+      formula: string;
+    };
     issues: string[];
     strengths?: string[];
     caseResults?: Array<{
@@ -88,6 +116,28 @@ export type RemoteEvaluation = {
         coverage: number;
         compliance: number;
         privacy: number;
+      };
+      semanticMetrics?: {
+        faithfulness: number;
+        coverage: number;
+        compliance: number;
+        privacy: number;
+      };
+      deterministicMetrics?: {
+        faithfulness: number;
+        coverage: number;
+        compliance: number;
+        privacy: number;
+      };
+      deterministicChecks?: {
+        matchedSourceFacts?: string[];
+        unsupportedCandidateFacts?: string[];
+        missingReferenceFacts?: string[];
+        matchedReferenceKeywords?: string[];
+        missingReferenceKeywords?: string[];
+        requiredRuleMisses?: string[];
+        forbiddenRuleHits?: string[];
+        privacyFlags?: string[];
       };
       strengths?: string[];
       missingPoints?: string[];

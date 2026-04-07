@@ -86,6 +86,28 @@ type CaseResult = {
     compliance: number;
     privacy: number;
   };
+  semanticMetrics: {
+    faithfulness: number;
+    coverage: number;
+    compliance: number;
+    privacy: number;
+  };
+  deterministicMetrics: {
+    faithfulness: number;
+    coverage: number;
+    compliance: number;
+    privacy: number;
+  };
+  deterministicChecks: {
+    matchedSourceFacts: string[];
+    unsupportedCandidateFacts: string[];
+    missingReferenceFacts: string[];
+    matchedReferenceKeywords: string[];
+    missingReferenceKeywords: string[];
+    requiredRuleMisses: string[];
+    forbiddenRuleHits: string[];
+    privacyFlags: string[];
+  };
   strengths: string[];
   missingPoints: string[];
   issues: string[];
@@ -124,6 +146,34 @@ type EvaluationRecord = {
     privacy: number | null;
     latency: number | null;
   };
+  semanticMetrics: {
+    faithfulness: number | null;
+    coverage: number | null;
+    compliance: number | null;
+    privacy: number | null;
+  };
+  deterministicMetrics: {
+    faithfulness: number | null;
+    coverage: number | null;
+    compliance: number | null;
+    privacy: number | null;
+  };
+  scoreBreakdown: {
+    judgeWeights: {
+      semantic: number;
+      deterministic: number;
+    };
+    metricWeights: {
+      faithfulness: number;
+      coverage: number;
+      compliance: number;
+      privacy: number;
+    };
+    semanticComposite: number | null;
+    deterministicComposite: number | null;
+    hybridComposite: number | null;
+    formula: string | null;
+  };
   issues: string[];
   strengths: string[];
   caseResults: CaseResult[];
@@ -139,6 +189,41 @@ const thresholds = {
   compliance: 90,
   privacy: 96,
 };
+
+const judgeWeightDefaults = {
+  semantic: 0.7,
+  deterministic: 0.3,
+};
+
+const metricWeightDefaults = {
+  faithfulness: 0.35,
+  coverage: 0.3,
+  compliance: 0.2,
+  privacy: 0.15,
+};
+
+const metricDefinitions = [
+  {
+    key: "faithfulness",
+    label: "Faithfulness",
+    description: "Accuracy relative to the source document",
+  },
+  {
+    key: "coverage",
+    label: "Coverage",
+    description: "Completeness vs. the reference benchmark",
+  },
+  {
+    key: "compliance",
+    label: "Compliance",
+    description: "Adherence to policy guidance",
+  },
+  {
+    key: "privacy",
+    label: "Privacy",
+    description: "Avoidance of sensitive content",
+  },
+] as const;
 
 const availableModels = [
   { id: "gpt-5.4", label: "GPT-5.4" },
@@ -199,77 +284,83 @@ const capabilityGuides: Record<
   "document-summarisation": {
     title: "Document summarisation",
     summary:
-      "Evaluate whether a candidate summary stays faithful to the source document, covers the important material signalled by the reference output, and respects any optional policy guidance.",
+      "This guide describes the actual backend pipeline for document summarisation: what the workflow does, what each model call receives, how findings are produced, and how the final score is calculated.",
     sections: [
       {
-        title: "Overview",
+        title: "Runtime overview",
         paragraphs: [
-          "This capability evaluates summaries for policies, reports, incident write-ups, and other enterprise documents where the output being tested is a concise summary.",
-          "The source document is treated as ground truth. The reference output shows what a strong summary should cover. Optional policy guidance adds extra privacy, compliance, or formatting constraints.",
+          "A document-summarisation run is an AWS Step Functions workflow with a small set of Lambda stages. The workflow does not currently build a separate expected-answer rubric JSON before scoring.",
+          "Instead, each case is scored in a single evaluator call that sees the source document, the reference output, any optional policy guidance, and the candidate summary together.",
         ],
       },
       {
-        title: "What you upload",
+        title: "What the backend treats as inputs",
         paragraphs: [
-          "Each run starts with at least one source document and at least one reference output. After that, you either select a model so the platform can generate the candidate summary, or you upload the candidate summary directly.",
+          "The source document is the ground truth for factual accuracy. The reference output is the benchmark for what strong coverage should include. Optional policy guidance is treated as extra compliance or privacy constraints.",
+          "The candidate summary comes from one of two places: either the platform model generates it during the workflow, or the user uploads it directly and the workflow reads it as the candidate output.",
         ],
         bullets: [
-          "Source document: the original material the summary should be based on.",
-          "Reference output: the approved benchmark summary used for coverage and usefulness.",
-          "Policy guidance: optional files or typed rules that add extra constraints.",
-          "Candidate output: either generated by the selected model or uploaded by the user.",
+          "Source document: truth source for faithfulness.",
+          "Reference output: benchmark for coverage and usefulness.",
+          "Policy guidance: optional extra constraints only.",
+          "Candidate output: generated by the platform model or loaded from uploaded AI outputs.",
         ],
       },
       {
-        title: "Step 1. Validate inputs",
+        title: "Stage 1. validate_input",
         paragraphs: [
-          "The workflow first checks that the required files exist and that the selected evaluation mode is coherent. Uploaded-output mode also requires candidate summaries to be present before scoring can begin.",
+          "The `validate_input` Lambda checks that the workflow has at least one source document, at least one reference output, and a coherent output mode.",
+          "In uploaded-output mode it also requires one uploaded candidate output per source document. In platform-model mode it requires a model ID.",
         ],
       },
       {
-        title: "Step 2. Build evaluation cases",
+        title: "Stage 2. build_test_cases",
         paragraphs: [
-          "Each source document becomes one test case. The workflow pairs it with a reference output and carries the optional policy guidance into the same case.",
-          "If there are fewer reference outputs than source documents, the workflow still assigns a benchmark so every case can be scored.",
+          "The `build_test_cases` Lambda creates one test case per source document.",
+          "Each case contains the source document, one reference output, the optional policy files, and an uploaded candidate output if the run is using uploaded-output mode. If there are fewer reference outputs than source documents, the workflow reuses an available reference so every case can still be scored.",
         ],
       },
       {
-        title: "Step 3. Resolve the candidate summary",
+        title: "Stage 3. resolve candidate output",
         paragraphs: [
-          "In platform-model mode, the selected OpenAI model reads the source document and optional policy guidance, then produces the candidate summary.",
-          "In uploaded-output mode, the workflow skips generation and uses the uploaded candidate file for that case instead.",
+          "In platform-model mode, `generate_platform_outputs` calls the selected OpenAI model with the system instruction `summarise this document`, the attached source document, and any optional policy guidance. The response text becomes the candidate summary for that case.",
+          "In uploaded-output mode, `load_uploaded_outputs` skips generation and marks the uploaded candidate file as the resolved output for scoring.",
         ],
       },
       {
-        title: "Step 4. Score with the evaluator",
+        title: "Stage 4. score_evaluation",
         paragraphs: [
-          "The evaluator model reads the source document, reference output, optional policy guidance, and candidate summary together for each case.",
-          "It returns structured scores for faithfulness, coverage, compliance, and privacy, plus short findings such as strengths, missing points, and concrete issues.",
+          "For each case, `score_evaluation` runs two scoring paths in parallel. The semantic path sends the source document, the reference output, optional policy guidance, and the candidate summary to the evaluator model in one structured scoring call.",
+          "The deterministic path extracts exact numeric/date facts, benchmark keywords, policy-rule fragments, and privacy patterns from the files directly in Python. It then scores fact support, benchmark coverage, policy-rule hits, and privacy flags without another model call.",
+          "The backend stores both score sets, blends them into the final hybrid metrics, and also stores readable preview text for the reference output when it can extract it.",
         ],
       },
       {
-        title: "Step 5. Produce the final report",
+        title: "How the score is calculated",
         paragraphs: [
-          "Case-level results are aggregated into overall metrics and a readiness decision. The saved report includes the final scores, key findings, token usage, latency, and the per-case breakdown.",
-        ],
-      },
-      {
-        title: "How to read the metrics",
-        paragraphs: [
-          "Faithfulness measures whether the candidate summary stays accurate to the source document. Coverage measures whether it captures the important material represented by the reference output.",
-          "Compliance and privacy reflect how well the candidate follows optional policy guidance and avoids exposing restricted or sensitive information.",
+          "Each case produces two score sets for `faithfulness`, `coverage`, `compliance`, and `privacy`: one from the LLM judge and one from deterministic checks. The backend blends each metric with `0.70 * semantic + 0.30 * deterministic` to produce the final hybrid metric for that case.",
+          "The backend then averages those hybrid metrics across all cases. The composite readiness score is calculated with a deterministic weighted formula: `0.35 * faithfulness + 0.30 * coverage + 0.20 * compliance + 0.15 * privacy`.",
+          "The decision is `Ready` if every metric passes its threshold, `Conditional` if every metric is within four points of its threshold, and `Not Ready` otherwise.",
         ],
         bullets: [
-          "Faithfulness: source-truth accuracy.",
-          "Coverage: completeness relative to the benchmark summary.",
-          "Compliance: adherence to optional guidance and constraints.",
-          "Privacy: avoidance of sensitive or identifying content.",
+          "Faithfulness threshold: 92",
+          "Coverage threshold: 86",
+          "Compliance threshold: 90",
+          "Privacy threshold: 96",
         ],
       },
       {
-        title: "Current scope",
+        title: "What gets written to storage",
         paragraphs: [
-          "This guide currently covers document summarisation only. Additional capability guides can be added later in the same format.",
+          "The workflow writes intermediate artifacts such as validation output, built test cases, resolved platform outputs, and the final report into the artifacts bucket.",
+          "The DynamoDB evaluation record stores the final aggregated result, per-case findings, token usage, processing time, and workflow stage. The results page reads from that saved evaluation record.",
+        ],
+      },
+      {
+        title: "Current implementation notes",
+        paragraphs: [
+          "The current evaluator is stricter about source-based omissions than reference-only omissions because the source document is treated as ground truth. That means a finding can appear even when the reference summary also missed the same detail.",
+          "This guide currently covers document summarisation only. Additional capability guides can be added later in the same backend-oriented format.",
         ],
       },
     ],
@@ -423,6 +514,88 @@ const getDecisionFromMetrics = (metrics: {
   return nearPass ? "Conditional" : "Not Ready";
 };
 
+const getCompositeFromMetrics = (metrics: {
+  faithfulness: number;
+  coverage: number;
+  compliance: number;
+  privacy: number;
+}) =>
+  Math.round(
+    (
+      metrics.faithfulness * metricWeightDefaults.faithfulness +
+      metrics.coverage * metricWeightDefaults.coverage +
+      metrics.compliance * metricWeightDefaults.compliance +
+      metrics.privacy * metricWeightDefaults.privacy
+    ) * 10,
+  ) / 10;
+
+const buildMetricBlendFormula = (
+  semanticValue: number | null | undefined,
+  deterministicValue: number | null | undefined,
+  finalValue: number | null | undefined,
+  judgeWeights: { semantic: number; deterministic: number } = judgeWeightDefaults,
+) => {
+  if (
+    !isFiniteNumber(semanticValue) ||
+    !isFiniteNumber(deterministicValue) ||
+    !isFiniteNumber(finalValue)
+  ) {
+    return null;
+  }
+
+  return `${judgeWeights.semantic.toFixed(2)} × ${semanticValue.toFixed(1)} + ${judgeWeights.deterministic.toFixed(2)} × ${deterministicValue.toFixed(1)} = ${finalValue.toFixed(1)}`;
+};
+
+const buildCompositeFormula = (
+  metrics: {
+    faithfulness: number | null;
+    coverage: number | null;
+    compliance: number | null;
+    privacy: number | null;
+  },
+  metricWeights: {
+    faithfulness: number;
+    coverage: number;
+    compliance: number;
+    privacy: number;
+  } = metricWeightDefaults,
+  finalValue?: number | null,
+) => {
+  const values = [
+    metrics.faithfulness,
+    metrics.coverage,
+    metrics.compliance,
+    metrics.privacy,
+  ];
+
+  if (!values.every((value) => isFiniteNumber(value))) {
+    return null;
+  }
+
+  const resolvedFinalValue =
+    finalValue ?? getCompositeFromMetrics({
+      faithfulness: metrics.faithfulness as number,
+      coverage: metrics.coverage as number,
+      compliance: metrics.compliance as number,
+      privacy: metrics.privacy as number,
+    });
+
+  return `${metricWeights.faithfulness.toFixed(2)} × ${(metrics.faithfulness as number).toFixed(1)} + ${metricWeights.coverage.toFixed(2)} × ${(metrics.coverage as number).toFixed(1)} + ${metricWeights.compliance.toFixed(2)} × ${(metrics.compliance as number).toFixed(1)} + ${metricWeights.privacy.toFixed(2)} × ${(metrics.privacy as number).toFixed(1)} = ${resolvedFinalValue.toFixed(1)}`;
+};
+
+const scaleMetricSet = <T extends {
+  faithfulness: number;
+  coverage: number;
+  compliance: number;
+  privacy: number;
+}>(metrics: T): T => ({
+  ...metrics,
+  faithfulness: metrics.faithfulness * 10,
+  coverage: metrics.coverage * 10,
+  compliance: metrics.compliance * 10,
+  privacy: metrics.privacy * 10,
+});
+
 const normalizeLegacyResultScale = (evaluation: RemoteEvaluation) => {
   const metrics = evaluation.result?.metrics;
   const caseResults = evaluation.result?.caseResults ?? [];
@@ -450,16 +623,16 @@ const normalizeLegacyResultScale = (evaluation: RemoteEvaluation) => {
       readinessScore: evaluation.result?.readinessScore ?? null,
       decision: evaluation.result?.decision ?? null,
       metrics: metrics ?? null,
+      semanticMetrics: evaluation.result?.semanticMetrics ?? null,
+      deterministicMetrics: evaluation.result?.deterministicMetrics ?? null,
+      scoreBreakdown: evaluation.result?.scoreBreakdown ?? null,
       caseResults,
     };
   }
 
   const normalizedMetrics = metrics
     ? {
-        faithfulness: metrics.faithfulness * 10,
-        coverage: metrics.coverage * 10,
-        compliance: metrics.compliance * 10,
-        privacy: metrics.privacy * 10,
+        ...scaleMetricSet(metrics),
         latency: metrics.latency,
       }
     : null;
@@ -475,14 +648,38 @@ const normalizeLegacyResultScale = (evaluation: RemoteEvaluation) => {
         ? evaluation.result?.decision ?? null
         : getDecisionFromMetrics(normalizedMetrics),
     metrics: normalizedMetrics,
+    semanticMetrics: evaluation.result?.semanticMetrics
+      ? scaleMetricSet(evaluation.result.semanticMetrics)
+      : normalizedMetrics
+        ? {
+            faithfulness: normalizedMetrics.faithfulness,
+            coverage: normalizedMetrics.coverage,
+            compliance: normalizedMetrics.compliance,
+            privacy: normalizedMetrics.privacy,
+          }
+        : null,
+    deterministicMetrics: evaluation.result?.deterministicMetrics
+      ? scaleMetricSet(evaluation.result.deterministicMetrics)
+      : null,
+    scoreBreakdown: evaluation.result?.scoreBreakdown
+      ? {
+          ...evaluation.result.scoreBreakdown,
+          semanticComposite:
+            evaluation.result.scoreBreakdown.semanticComposite * 10,
+          deterministicComposite:
+            evaluation.result.scoreBreakdown.deterministicComposite * 10,
+          hybridComposite: evaluation.result.scoreBreakdown.hybridComposite * 10,
+        }
+      : null,
     caseResults: caseResults.map((caseResult) => ({
       ...caseResult,
-      metrics: {
-        faithfulness: caseResult.metrics.faithfulness * 10,
-        coverage: caseResult.metrics.coverage * 10,
-        compliance: caseResult.metrics.compliance * 10,
-        privacy: caseResult.metrics.privacy * 10,
-      },
+      metrics: scaleMetricSet(caseResult.metrics),
+      semanticMetrics: caseResult.semanticMetrics
+        ? scaleMetricSet(caseResult.semanticMetrics)
+        : scaleMetricSet(caseResult.metrics),
+      deterministicMetrics: caseResult.deterministicMetrics
+        ? scaleMetricSet(caseResult.deterministicMetrics)
+        : scaleMetricSet(caseResult.metrics),
     })),
   };
 };
@@ -522,6 +719,27 @@ const mapRemoteEvaluation = (evaluation: RemoteEvaluation): EvaluationRecord => 
       privacy: normalizedResult.metrics?.privacy ?? null,
       latency: normalizedResult.metrics?.latency ?? null,
     },
+    semanticMetrics: {
+      faithfulness: normalizedResult.semanticMetrics?.faithfulness ?? null,
+      coverage: normalizedResult.semanticMetrics?.coverage ?? null,
+      compliance: normalizedResult.semanticMetrics?.compliance ?? null,
+      privacy: normalizedResult.semanticMetrics?.privacy ?? null,
+    },
+    deterministicMetrics: {
+      faithfulness: normalizedResult.deterministicMetrics?.faithfulness ?? null,
+      coverage: normalizedResult.deterministicMetrics?.coverage ?? null,
+      compliance: normalizedResult.deterministicMetrics?.compliance ?? null,
+      privacy: normalizedResult.deterministicMetrics?.privacy ?? null,
+    },
+    scoreBreakdown: {
+      judgeWeights: normalizedResult.scoreBreakdown?.judgeWeights ?? judgeWeightDefaults,
+      metricWeights:
+        normalizedResult.scoreBreakdown?.metricWeights ?? metricWeightDefaults,
+      semanticComposite: normalizedResult.scoreBreakdown?.semanticComposite ?? null,
+      deterministicComposite: normalizedResult.scoreBreakdown?.deterministicComposite ?? null,
+      hybridComposite: normalizedResult.scoreBreakdown?.hybridComposite ?? normalizedResult.readinessScore,
+      formula: normalizedResult.scoreBreakdown?.formula ?? null,
+    },
     issues: evaluation.result?.issues ?? (evaluation.error ? [evaluation.error] : []),
     strengths: evaluation.result?.strengths ?? [],
     caseResults: normalizedResult.caseResults.map((caseResult) => ({
@@ -533,6 +751,24 @@ const mapRemoteEvaluation = (evaluation: RemoteEvaluation): EvaluationRecord => 
       source: caseResult.source,
       modelId: caseResult.modelId ?? null,
       metrics: caseResult.metrics,
+      semanticMetrics: caseResult.semanticMetrics ?? caseResult.metrics,
+      deterministicMetrics: caseResult.deterministicMetrics ?? caseResult.metrics,
+      deterministicChecks: {
+        matchedSourceFacts: caseResult.deterministicChecks?.matchedSourceFacts ?? [],
+        unsupportedCandidateFacts:
+          caseResult.deterministicChecks?.unsupportedCandidateFacts ?? [],
+        missingReferenceFacts:
+          caseResult.deterministicChecks?.missingReferenceFacts ?? [],
+        matchedReferenceKeywords:
+          caseResult.deterministicChecks?.matchedReferenceKeywords ?? [],
+        missingReferenceKeywords:
+          caseResult.deterministicChecks?.missingReferenceKeywords ?? [],
+        requiredRuleMisses:
+          caseResult.deterministicChecks?.requiredRuleMisses ?? [],
+        forbiddenRuleHits:
+          caseResult.deterministicChecks?.forbiddenRuleHits ?? [],
+        privacyFlags: caseResult.deterministicChecks?.privacyFlags ?? [],
+      },
       strengths: caseResult.strengths ?? [],
       missingPoints: caseResult.missingPoints ?? [],
       issues: caseResult.issues ?? [],
@@ -645,6 +881,26 @@ const createPendingEvaluation = (
       compliance: null,
       privacy: null,
       latency: null,
+    },
+    semanticMetrics: {
+      faithfulness: null,
+      coverage: null,
+      compliance: null,
+      privacy: null,
+    },
+    deterministicMetrics: {
+      faithfulness: null,
+      coverage: null,
+      compliance: null,
+      privacy: null,
+    },
+    scoreBreakdown: {
+      judgeWeights: judgeWeightDefaults,
+      metricWeights: metricWeightDefaults,
+      semanticComposite: null,
+      deterministicComposite: null,
+      hybridComposite: null,
+      formula: null,
     },
     issues: [],
     strengths: [],
@@ -1315,6 +1571,7 @@ function App() {
   const isPollingRef = useRef(false);
   const [isDeletingEvaluation, setIsDeletingEvaluation] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null);
 
   const selectedEvaluation =
     evaluations.find((evaluation) => evaluation.id === selectedEvaluationId) ?? null;
@@ -2264,88 +2521,131 @@ function App() {
     </>
   );
 
-  const renderResults = () => (
-    <>
-      <header className="screen-header">
-        <div>
-          <span className="screen-label">Results</span>
-          <h1>Latest result</h1>
-        </div>
-        <div className="header-actions">
-          {lastEvaluation && lastEvaluation.status !== "RUNNING" ? (
-            <button
-              className="ghost-button danger-button"
-              disabled={isDeletingEvaluation}
-              onClick={() => void handleDeleteEvaluation(lastEvaluation)}
-              type="button"
-            >
-              {isDeletingEvaluation ? "Deleting..." : "Delete evaluation"}
+  const renderResults = () => {
+    const tone = lastEvaluation
+      ? getTone(lastEvaluation.decision, lastEvaluation.status)
+      : "neutral";
+
+    return (
+      <>
+        {/* ── Page header ─────────────────────────────────────── */}
+        <header className="screen-header">
+          <div>
+            <span className="screen-label">Results</span>
+            <h1>
+              {lastEvaluation?.status === "RUNNING"
+                ? "Evaluation in progress"
+                : lastEvaluation?.status === "COMPLETED"
+                  ? "Evaluation report"
+                  : lastEvaluation?.status === "FAILED"
+                    ? "Evaluation failed"
+                    : "Latest result"}
+            </h1>
+          </div>
+          <div className="header-actions">
+            {lastEvaluation && lastEvaluation.status !== "RUNNING" ? (
+              <button
+                className="ghost-button danger-button"
+                disabled={isDeletingEvaluation}
+                onClick={() => void handleDeleteEvaluation(lastEvaluation)}
+                type="button"
+              >
+                {isDeletingEvaluation ? "Deleting…" : "Delete"}
+              </button>
+            ) : null}
+            <button className="primary-button" onClick={openNewEvaluation} type="button">
+              + New evaluation
             </button>
-          ) : null}
-          <button className="primary-button" onClick={openNewEvaluation} type="button">
-            New evaluation
-          </button>
-        </div>
-      </header>
+          </div>
+        </header>
 
-      {statusMessage ? <div className="status-banner">{statusMessage}</div> : null}
+        {statusMessage ? <div className="status-banner">{statusMessage}</div> : null}
 
-      {lastEvaluation ? (
-        lastEvaluation.status === "RUNNING" ? (
+        {/* ── No evaluation yet ───────────────────────────────── */}
+        {!lastEvaluation ? (
+          <article className="panel results-empty-hero">
+            <div className="results-empty-hero__icon" aria-hidden="true">
+              <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                <rect x="6" y="6" width="28" height="28" rx="6" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M13 20h14M13 14h14M13 26h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </div>
+            <strong>No evaluations yet</strong>
+            <span>Run your first evaluation to see the report here.</span>
+            <button className="primary-button" onClick={openNewEvaluation} type="button">
+              Start evaluation
+            </button>
+          </article>
+        ) : lastEvaluation.status === "RUNNING" ? (
+
+          /* ── Running ──────────────────────────────────────── */
           <>
-            {(() => {
-              const displayedStage =
-                getWorkflowStagesForEvaluation(lastEvaluation).find((stage) => stage.state === "active")
-                  ?.id ?? lastEvaluation.workflowStage;
-              const displayedStageMeta = getWorkflowStageMeta(
-                displayedStage,
-                lastEvaluation.outputSource,
-              );
-
-              return (
-                <>
-            <section className="card-grid">
-              <SummaryCard
-                label="Status"
-                value={displayedStageMeta.label}
-                meta="Workflow stage"
-              />
-              <SummaryCard
-                label="Evaluation ID"
-                value={lastEvaluation.id}
-                meta="Tracked in AWS"
-              />
-              <SummaryCard
-                label="Output source"
-                value={
-                  lastEvaluation.outputSource === "platform-model"
-                    ? "Platform model"
-                    : "Uploaded outputs"
-                }
-                meta={`${lastEvaluation.documentCount} source docs`}
-              />
-              <SummaryCard
-                label="Started"
-                value={new Intl.DateTimeFormat("en-AU", {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                }).format(new Date(lastEvaluation.createdAt))}
-                meta="Most recent update"
-              />
-            </section>
-
-            <section className="content-grid">
-              <RunningWorkflowPanel
-                heading="Evaluation in progress"
-                stages={getWorkflowStagesForEvaluation(lastEvaluation)}
-                summary={displayedStageMeta.description}
-              />
-
-              <article className="panel">
-                <div className="panel-header">
-                  <span className="panel-title">Current setup</span>
+            {/* Live status strip */}
+            <div className="running-strip">
+              <div className="running-strip__left">
+                <span className="running-strip__pill">
+                  <span className="running-strip__dot" />
+                  Live
+                </span>
+                <div>
+                  <p className="running-strip__stage">
+                    {getWorkflowStageMeta(lastEvaluation.workflowStage, lastEvaluation.outputSource).label}
+                  </p>
+                  <p className="running-strip__desc">
+                    {getWorkflowStageMeta(lastEvaluation.workflowStage, lastEvaluation.outputSource).description}
+                  </p>
                 </div>
-                <div className="detail-grid">
+              </div>
+              <div className="running-strip__right">
+                <div className="running-strip__meta">
+                  <span className="panel-label">Started</span>
+                  <strong>
+                    {new Intl.DateTimeFormat("en-AU", {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(lastEvaluation.createdAt))}
+                  </strong>
+                </div>
+                <div className="running-strip__meta">
+                  <span className="panel-label">Source docs</span>
+                  <strong>{lastEvaluation.documentCount}</strong>
+                </div>
+                <div className="running-strip__meta">
+                  <span className="panel-label">Output</span>
+                  <strong>
+                    {lastEvaluation.outputSource === "platform-model"
+                      ? getModelLabel(lastEvaluation.modelId)
+                      : "Uploaded"}
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            {/* Workflow tracker + setup side-by-side */}
+            <section className="running-body">
+              <RunningWorkflowPanel
+                heading="Workflow progress"
+                stages={getWorkflowStagesForEvaluation(lastEvaluation)}
+                summary={getWorkflowStageMeta(lastEvaluation.workflowStage, lastEvaluation.outputSource).description}
+              />
+
+              <article className="panel running-setup-panel">
+                <div className="panel-header">
+                  <span className="panel-title">Evaluation setup</span>
+                </div>
+                <div className="running-setup-grid">
+                  <div>
+                    <span className="detail-label">Capability</span>
+                    <strong>{lastEvaluation.capability}</strong>
+                  </div>
+                  <div>
+                    <span className="detail-label">Output mode</span>
+                    <strong>
+                      {lastEvaluation.outputSource === "platform-model"
+                        ? "Platform model"
+                        : "Uploaded AI outputs"}
+                    </strong>
+                  </div>
                   <div>
                     <span className="detail-label">Source documents</span>
                     <strong>{lastEvaluation.documentCount}</strong>
@@ -2355,301 +2655,684 @@ function App() {
                     <strong>{lastEvaluation.referenceCount}</strong>
                   </div>
                   <div>
-                    <span className="detail-label">Policy guidance</span>
+                    <span className="detail-label">Policy files</span>
                     <strong>{lastEvaluation.policyCount}</strong>
                   </div>
                   <div>
-                    <span className="detail-label">Model</span>
+                    <span className="detail-label">
+                      {lastEvaluation.outputSource === "platform-model" ? "Model" : "AI outputs"}
+                    </span>
                     <strong>
                       {lastEvaluation.outputSource === "platform-model"
                         ? getModelLabel(lastEvaluation.modelId)
-                        : `${lastEvaluation.outputCount} uploaded outputs`}
+                        : `${lastEvaluation.outputCount} files`}
                     </strong>
                   </div>
                 </div>
+                <div className="running-id">
+                  <span className="panel-label">Evaluation ID</span>
+                  <code>{lastEvaluation.id}</code>
+                </div>
               </article>
             </section>
-                </>
-              );
-            })()}
           </>
+
         ) : lastEvaluation.status === "FAILED" ? (
-          <section className="content-grid">
-            <article className="panel feature-panel">
-              <div className="empty-state">
-                <strong>Evaluation failed</strong>
-                <span>
-                  {lastEvaluation.issues[0] ??
-                    "The workflow failed before a completed score could be written."}
-                </span>
-              </div>
-            </article>
-          </section>
+
+          /* ── Failed ───────────────────────────────────────── */
+          <article className="panel results-empty-hero results-empty-hero--danger">
+            <div className="results-empty-hero__icon" aria-hidden="true">
+              <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                <circle cx="20" cy="20" r="14" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M15 15l10 10M25 15L15 25" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </div>
+            <strong>Evaluation failed</strong>
+            <span>
+              {lastEvaluation.issues[0] ??
+                "The workflow failed before a completed score could be written."}
+            </span>
+          </article>
+
         ) : (
+
+          /* ── Completed ────────────────────────────────────── */
           <>
-          <section className="card-grid">
-            <SummaryCard
-              label="Decision"
-              value={lastEvaluation.decision ?? "Completed"}
-              meta="Overall outcome"
-            />
-            <SummaryCard
-              label="Readiness"
-              value={lastEvaluation.readinessScore?.toFixed(1) ?? "—"}
-              meta="Composite score"
-            />
-            <SummaryCard
-              label="Output source"
-              value={
-                lastEvaluation.outputSource === "platform-model"
-                  ? "Platform model"
-                  : "Uploaded outputs"
-              }
-              meta={
-                lastEvaluation.outputSource === "platform-model"
-                  ? getModelLabel(lastEvaluation.modelId)
-                  : `${lastEvaluation.outputCount} outputs`
-              }
-            />
-            <SummaryCard
-              label="Runtime"
-              value={formatSeconds(lastEvaluation.processingSeconds)}
-              meta={`${formatTokenCount(lastEvaluation.tokenUsage?.totalTokens ?? null)} tokens`}
-            />
-          </section>
-
-          <section className="content-grid">
-            <article className="panel">
-              <div className="panel-header">
-                <span className="panel-title">Metrics</span>
-                <DecisionPill
-                  label={getDecisionLabel(lastEvaluation)}
-                  tone={getTone(lastEvaluation.decision, lastEvaluation.status)}
-                />
-              </div>
-
-              {lastEvaluation.metrics.faithfulness !== null &&
-              lastEvaluation.metrics.coverage !== null &&
-              lastEvaluation.metrics.compliance !== null &&
-              lastEvaluation.metrics.privacy !== null ? (
-                <>
-                  <MetricRail
-                    label="Faithfulness"
-                    value={lastEvaluation.metrics.faithfulness}
-                    target={thresholds.faithfulness}
-                  />
-                  <MetricRail
-                    label="Coverage"
-                    value={lastEvaluation.metrics.coverage}
-                    target={thresholds.coverage}
-                  />
-                  <MetricRail
-                    label="Compliance"
-                    value={lastEvaluation.metrics.compliance}
-                    target={thresholds.compliance}
-                  />
-                  <MetricRail
-                    label="Privacy"
-                    value={lastEvaluation.metrics.privacy}
-                    target={thresholds.privacy}
-                  />
-                </>
-              ) : (
-                <div className="issue-item issue-item--neutral">
-                  Metric results have not been written yet.
-                </div>
-              )}
-
-              {lastEvaluation.metrics.latency === null ? (
-                <div className="issue-item issue-item--neutral">
-                  No generation latency was recorded for this run.
-                </div>
-              ) : (
-                <div className="metric-row metric-row--single">
-                  <div className="metric-row__meta">
-                    <span>Average generation latency</span>
-                    <strong>{formatLatency(lastEvaluation.metrics.latency)}</strong>
-                  </div>
-                </div>
-              )}
-            </article>
-
-            <article className="panel">
-              <div className="panel-header">
-                <span className="panel-title">Issues</span>
-              </div>
-
-              {lastEvaluation.issues.length > 0 ? (
-                <div className="issue-list">
-                  {lastEvaluation.issues.map((issue) => (
-                    <div key={issue} className="issue-item">
-                      {issue}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state empty-state--small">
-                  <span>No blocking issues.</span>
-                </div>
-              )}
-            </article>
-          </section>
-
-          <section className="content-grid">
-            <article className="panel">
-              <div className="panel-header">
-                <span className="panel-title">Setup</span>
-              </div>
-              <div className="detail-grid">
-                <div>
-                  <span className="detail-label">Platform model</span>
-                  <strong>
+            {/* Hero verdict banner */}
+            <div className={`results-hero results-hero--${tone}`}>
+              <div className="results-hero__left">
+                <span className="results-hero__label">Overall verdict</span>
+                <h2 className="results-hero__decision">
+                  {lastEvaluation.decision ?? "Completed"}
+                </h2>
+                <div className="results-hero__meta">
+                  <span>{lastEvaluation.capability}</span>
+                  <span className="results-hero__dot" aria-hidden="true" />
+                  <span>
                     {lastEvaluation.outputSource === "platform-model"
                       ? getModelLabel(lastEvaluation.modelId)
                       : "Uploaded outputs"}
-                  </strong>
-                </div>
-                <div>
-                  <span className="detail-label">Evaluator model</span>
-                  <strong>{getModelLabel(lastEvaluation.evaluatorModel)}</strong>
-                </div>
-                <div>
-                  <span className="detail-label">Processing time</span>
-                  <strong>{formatSeconds(lastEvaluation.processingSeconds)}</strong>
-                </div>
-                <div>
-                  <span className="detail-label">Total tokens</span>
-                  <strong>{formatTokenCount(lastEvaluation.tokenUsage?.totalTokens ?? null)}</strong>
+                  </span>
+                  <span className="results-hero__dot" aria-hidden="true" />
+                  <span>
+                    {new Intl.DateTimeFormat("en-AU", {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(lastEvaluation.createdAt))}
+                  </span>
                 </div>
               </div>
-            </article>
-
-            <article className="panel">
-              <div className="panel-header">
-                <span className="panel-title">Files</span>
-              </div>
-              <div className="file-columns">
-                <FileListColumn label="Documents" files={lastEvaluation.documents} />
-                <FileListColumn
-                  label="Reference outputs"
-                  files={lastEvaluation.referenceOutputs}
-                />
-                <FileListColumn label="Rules / policies" files={lastEvaluation.policyFiles} />
-                {lastEvaluation.outputSource === "uploaded-outputs" ? (
-                  <FileListColumn label="AI outputs" files={lastEvaluation.aiOutputs} />
-                ) : null}
-              </div>
-            </article>
-          </section>
-
-          {lastEvaluation.caseResults.length > 0 ? (
-            <section className="case-results">
-              {lastEvaluation.caseResults.map((caseResult) => (
-                <article key={caseResult.caseId} className="panel case-card">
-                  <div className="case-card__header">
-                    <div className="case-card__title">
-                      <span className="panel-label">{caseResult.caseId}</span>
-                      <strong>{caseResult.sourceDocument}</strong>
-                    </div>
-                    <div className="case-card__metrics">
-                      <span>{caseResult.metrics.faithfulness}% faithfulness</span>
-                      <span>{caseResult.metrics.coverage}% coverage</span>
-                      <span>{caseResult.metrics.compliance}% compliance</span>
-                      <span>{caseResult.metrics.privacy}% privacy</span>
-                    </div>
+              <div className="results-hero__right">
+                <div className="results-score-dial">
+                  <svg className="results-score-dial__ring" viewBox="0 0 120 120">
+                    <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="8" />
+                    <circle
+                      cx="60"
+                      cy="60"
+                      r="52"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="8"
+                      strokeLinecap="round"
+                      strokeDasharray={`${2 * Math.PI * 52}`}
+                      strokeDashoffset={`${2 * Math.PI * 52 * (1 - (lastEvaluation.readinessScore ?? 0) / 100)}`}
+                      transform="rotate(-90 60 60)"
+                    />
+                  </svg>
+                  <div className="results-score-dial__inner">
+                    <strong>{lastEvaluation.readinessScore?.toFixed(1) ?? "—"}</strong>
+                    <span>/ 100</span>
                   </div>
+                </div>
+                <p className="results-score-label">Readiness score</p>
+              </div>
+            </div>
 
-                  <div className="case-card__meta">
-                    <span>
-                      Reference output: {caseResult.referenceOutput ?? "Not attached"}
-                    </span>
-                    <span>
-                      Candidate:{" "}
-                      {caseResult.source === "platform-model"
-                        ? `Generated by ${getModelLabel(caseResult.modelId)}`
-                        : "Uploaded AI output"}
-                    </span>
-                    <span>
-                      Evaluation latency: {formatSeconds(caseResult.evaluationLatencySeconds)}
-                    </span>
-                    {caseResult.generationLatencySeconds !== null ? (
-                      <span>
-                        Generation latency: {formatSeconds(caseResult.generationLatencySeconds)}
-                      </span>
-                    ) : null}
+            {/* Quick-stat strip */}
+            <div className="results-stat-strip">
+              <div className="results-stat">
+                <span className="panel-label">Runtime</span>
+                <strong>{formatSeconds(lastEvaluation.processingSeconds)}</strong>
+              </div>
+              <div className="results-stat">
+                <span className="panel-label">Tokens used</span>
+                <strong>{formatTokenCount(lastEvaluation.tokenUsage?.totalTokens ?? null)}</strong>
+              </div>
+              <div className="results-stat">
+                <span className="panel-label">Cases evaluated</span>
+                <strong>{lastEvaluation.caseResults.length || lastEvaluation.documentCount}</strong>
+              </div>
+              <div className="results-stat">
+                <span className="panel-label">Evaluator</span>
+                <strong>{getModelLabel(lastEvaluation.evaluatorModel)}</strong>
+              </div>
+              <div className="results-stat">
+                <span className="panel-label">Avg latency</span>
+                <strong>{formatLatency(lastEvaluation.metrics.latency)}</strong>
+              </div>
+            </div>
+
+            <section className="results-score-grid">
+              <article className="panel results-score-panel">
+                <div className="panel-header">
+                  <span className="panel-title">Score calculation</span>
+                  <DecisionPill
+                    label={getDecisionLabel(lastEvaluation)}
+                    tone={tone}
+                  />
+                </div>
+
+                <div className="score-calc-grid">
+                  <div className="score-calc-card">
+                    <span className="panel-label">Semantic judge</span>
+                    <strong>
+                      {lastEvaluation.scoreBreakdown.semanticComposite?.toFixed(1) ?? "—"}
+                    </strong>
+                    <span>LLM-based semantic scoring</span>
                   </div>
+                  <div className="score-calc-card">
+                    <span className="panel-label">Deterministic</span>
+                    <strong>
+                      {lastEvaluation.scoreBreakdown.deterministicComposite?.toFixed(1) ?? "—"}
+                    </strong>
+                    <span>Exact facts, keyword coverage, rules, privacy</span>
+                  </div>
+                  <div className="score-calc-card score-calc-card--accent">
+                    <span className="panel-label">Final hybrid</span>
+                    <strong>
+                      {lastEvaluation.scoreBreakdown.hybridComposite?.toFixed(1) ??
+                        lastEvaluation.readinessScore?.toFixed(1) ??
+                        "—"}
+                    </strong>
+                    <span>
+                      {`${Math.round(lastEvaluation.scoreBreakdown.judgeWeights.semantic * 100)}% semantic + ${Math.round(lastEvaluation.scoreBreakdown.judgeWeights.deterministic * 100)}% deterministic`}
+                    </span>
+                  </div>
+                </div>
 
-                  <div className="case-compare">
-                    <section className="case-pane">
-                      <div className="case-pane__header">
-                        <span className="detail-label">Reference output</span>
-                        <strong>{caseResult.referenceOutput ?? "Reference benchmark"}</strong>
-                      </div>
-                      <div className="case-pane__content">
-                        {caseResult.referenceText?.trim() ? (
-                          <pre>{caseResult.referenceText}</pre>
-                        ) : (
-                          <div className="case-pane__empty">
-                            This saved run does not include an extracted reference preview yet.
-                            Redeploy the backend and run the evaluation again to populate it.
+                <div className="score-formula-strip">
+                  <span className="panel-label">Hybrid metric formula</span>
+                  <div className="score-formula-list">
+                    {metricDefinitions.map((metric) => {
+                      const formula = buildMetricBlendFormula(
+                        lastEvaluation.semanticMetrics[metric.key],
+                        lastEvaluation.deterministicMetrics[metric.key],
+                        lastEvaluation.metrics[metric.key],
+                        lastEvaluation.scoreBreakdown.judgeWeights,
+                      );
+
+                      return formula ? (
+                        <div className="score-formula-row" key={metric.key}>
+                          <strong>{metric.label}</strong>
+                          <code>{formula}</code>
+                        </div>
+                      ) : null;
+                    })}
+                  </div>
+                </div>
+
+                <div className="score-formula-strip score-formula-strip--accent">
+                  <span className="panel-label">Final readiness formula</span>
+                  <code>
+                    {buildCompositeFormula(
+                      lastEvaluation.metrics,
+                      lastEvaluation.scoreBreakdown.metricWeights,
+                      lastEvaluation.scoreBreakdown.hybridComposite ??
+                        lastEvaluation.readinessScore,
+                    ) ??
+                      lastEvaluation.scoreBreakdown.formula ??
+                      "final_score = 0.35 × faithfulness + 0.30 × coverage + 0.20 × compliance + 0.15 × privacy"}
+                  </code>
+                </div>
+              </article>
+
+              <article className="panel results-metrics-panel">
+                <div className="panel-header">
+                  <span className="panel-title">Metric breakdown</span>
+                </div>
+
+                {lastEvaluation.metrics.faithfulness !== null &&
+                lastEvaluation.metrics.coverage !== null &&
+                lastEvaluation.metrics.compliance !== null &&
+                lastEvaluation.metrics.privacy !== null ? (
+                  <div className="metric-compare-table">
+                    <div className="metric-compare-table__head">
+                      <span>Metric</span>
+                      <span>LLM judge</span>
+                      <span>Deterministic</span>
+                      <span>Final hybrid</span>
+                      <span>Target</span>
+                    </div>
+
+                    {metricDefinitions.map((metric) => {
+                      const finalValue = lastEvaluation.metrics[metric.key];
+                      const semanticValue = lastEvaluation.semanticMetrics[metric.key];
+                      const deterministicValue = lastEvaluation.deterministicMetrics[metric.key];
+                      const target = thresholds[metric.key];
+                      const finalTone = (finalValue ?? 0) >= target ? "good" : "bad";
+
+                      return (
+                        <div className="metric-compare-table__row" key={metric.key}>
+                          <div className="metric-compare-table__metric">
+                            <strong>{metric.label}</strong>
+                            <span>{metric.description}</span>
                           </div>
-                        )}
-                      </div>
-                    </section>
-
-                    <section className="case-pane">
-                      <div className="case-pane__header">
-                        <span className="detail-label">Candidate summary</span>
-                        <strong>
-                          {caseResult.source === "platform-model"
-                            ? getModelLabel(caseResult.modelId)
-                            : "Uploaded output"}
-                        </strong>
-                      </div>
-                      <div className="case-pane__content">
-                        <pre>{caseResult.candidateSummary}</pre>
-                      </div>
-                    </section>
+                          <span>{semanticValue?.toFixed(1) ?? "—"}</span>
+                          <span>{deterministicValue?.toFixed(1) ?? "—"}</span>
+                          <span className={`metric-compare-table__final metric-compare-table__final--${finalTone}`}>
+                            {finalValue?.toFixed(1) ?? "—"}
+                          </span>
+                          <span>{target}%</span>
+                        </div>
+                      );
+                    })}
                   </div>
-
-                  <div className="case-findings-grid">
-                    <CaseFindingGroup
-                      label="Strengths"
-                      items={caseResult.strengths}
-                      emptyLabel="No strengths recorded."
-                    />
-                    <CaseFindingGroup
-                      label="Missing points"
-                      items={caseResult.missingPoints}
-                      emptyLabel="No missing points recorded."
-                    />
-                    <CaseFindingGroup
-                      label="Issues"
-                      items={caseResult.issues}
-                      emptyLabel="No issues recorded."
-                    />
-                    <CaseFindingGroup
-                      label="Policy findings"
-                      items={caseResult.policyFindings}
-                      emptyLabel="No policy findings."
-                    />
-                  </div>
-                </article>
-              ))}
+                ) : (
+                  <p className="results-no-metrics">Metric scores have not been written yet.</p>
+                )}
+              </article>
             </section>
-          ) : null}
+
+            {/* Findings row — strengths + issues */}
+            <section className="results-findings-row">
+              {/* Strengths */}
+              <article className="panel results-finding-panel results-finding-panel--good">
+                <div className="panel-header">
+                  <span className="panel-title">Strengths</span>
+                  {lastEvaluation.strengths.length > 0 ? (
+                    <span className="results-finding-count results-finding-count--good">
+                      {lastEvaluation.strengths.length}
+                    </span>
+                  ) : null}
+                </div>
+                {lastEvaluation.strengths.length > 0 ? (
+                  <ul className="results-finding-list">
+                    {lastEvaluation.strengths.map((s, i) => (
+                      <li key={i} className="results-finding-item results-finding-item--good">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                          <path d="M2.5 7.5L5.5 10.5L11.5 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {s}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="results-finding-empty">No strengths recorded for this run.</p>
+                )}
+              </article>
+
+              {/* Issues */}
+              <article className="panel results-finding-panel results-finding-panel--bad">
+                <div className="panel-header">
+                  <span className="panel-title">Issues</span>
+                  {lastEvaluation.issues.length > 0 ? (
+                    <span className="results-finding-count results-finding-count--bad">
+                      {lastEvaluation.issues.length}
+                    </span>
+                  ) : null}
+                </div>
+                {lastEvaluation.issues.length > 0 ? (
+                  <ul className="results-finding-list">
+                    {lastEvaluation.issues.map((s, i) => (
+                      <li key={i} className="results-finding-item results-finding-item--bad">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                          <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.6" />
+                          <path d="M7 4.5v3M7 9.5v.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                        </svg>
+                        {s}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="results-finding-empty">No blocking issues detected.</p>
+                )}
+              </article>
+            </section>
+
+            {/* Case results accordion */}
+            {lastEvaluation.caseResults.length > 0 ? (
+              <article className="panel results-cases-panel">
+                <div className="panel-header">
+                  <span className="panel-title">Case breakdown</span>
+                  <span className="panel-meta">
+                    {lastEvaluation.caseResults.length} case{lastEvaluation.caseResults.length !== 1 ? "s" : ""}
+                  </span>
+                </div>
+
+                <div className="results-accordion">
+                  {lastEvaluation.caseResults.map((cr) => {
+                    const isOpen = expandedCaseId === cr.caseId;
+                    const caseScore = getCompositeFromMetrics(cr.metrics);
+                    const caseTone =
+                      caseScore >= 88 ? "good" : caseScore >= 70 ? "warn" : "bad";
+
+                    return (
+                      <div key={cr.caseId} className={`accordion-item ${isOpen ? "accordion-item--open" : ""}`}>
+                        <button
+                          className="accordion-trigger"
+                          onClick={() => setExpandedCaseId(isOpen ? null : cr.caseId)}
+                          type="button"
+                          aria-expanded={isOpen}
+                        >
+                          <div className="accordion-trigger__left">
+                            <span className={`accordion-trigger__indicator accordion-trigger__indicator--${caseTone}`} />
+                            <div className="accordion-trigger__info">
+                              <strong>{cr.sourceDocument}</strong>
+                              <span>{cr.caseId}</span>
+                            </div>
+                          </div>
+                          <div className="accordion-trigger__right">
+                            <div className="accordion-badges">
+                              {(
+                                [
+                                  { k: "F", v: cr.metrics.faithfulness, t: thresholds.faithfulness },
+                                  { k: "C", v: cr.metrics.coverage, t: thresholds.coverage },
+                                  { k: "Co", v: cr.metrics.compliance, t: thresholds.compliance },
+                                  { k: "P", v: cr.metrics.privacy, t: thresholds.privacy },
+                                ] as const
+                              ).map((m) => (
+                                <span
+                                  key={m.k}
+                                  className={`accordion-badge accordion-badge--${m.v >= m.t ? "good" : "bad"}`}
+                                  title={`${m.k}: ${m.v}%`}
+                                >
+                                  {m.k} {m.v}%
+                                </span>
+                              ))}
+                            </div>
+                            <span className={`accordion-score accordion-score--${caseTone}`}>
+                              {caseScore.toFixed(1)}
+                            </span>
+                            <svg
+                              className={`accordion-chevron ${isOpen ? "accordion-chevron--open" : ""}`}
+                              width="16"
+                              height="16"
+                              viewBox="0 0 16 16"
+                              fill="none"
+                              aria-hidden="true"
+                            >
+                              <path
+                                d="M4 6l4 4 4-4"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          </div>
+                        </button>
+
+                        {isOpen ? (
+                          <div className="accordion-body">
+                            {/* Case meta */}
+                            <div className="accordion-meta-strip">
+                              <div>
+                                <span className="panel-label">Reference</span>
+                                <span>{cr.referenceOutput ?? "Not attached"}</span>
+                              </div>
+                              <div>
+                                <span className="panel-label">Candidate</span>
+                                <span>
+                                  {cr.source === "platform-model"
+                                    ? `${getModelLabel(cr.modelId)}`
+                                    : "Uploaded AI output"}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="panel-label">Eval latency</span>
+                                <span>{formatSeconds(cr.evaluationLatencySeconds)}</span>
+                              </div>
+                              {cr.generationLatencySeconds !== null ? (
+                                <div>
+                                  <span className="panel-label">Gen latency</span>
+                                  <span>{formatSeconds(cr.generationLatencySeconds)}</span>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="accordion-score-grid">
+                              <div className="accordion-score-card">
+                                <span className="panel-label">Semantic judge</span>
+                                <strong>{getCompositeFromMetrics(cr.semanticMetrics).toFixed(1)}</strong>
+                                <span>LLM-based semantic scoring</span>
+                              </div>
+                              <div className="accordion-score-card">
+                                <span className="panel-label">Deterministic</span>
+                                <strong>{getCompositeFromMetrics(cr.deterministicMetrics).toFixed(1)}</strong>
+                                <span>Exact facts, benchmark terms, rules, privacy</span>
+                              </div>
+                              <div className="accordion-score-card accordion-score-card--accent">
+                                <span className="panel-label">Final hybrid</span>
+                                <strong>{caseScore.toFixed(1)}</strong>
+                                <span>70% semantic + 30% deterministic</span>
+                              </div>
+                            </div>
+
+                            <div className="accordion-metric-table">
+                              <div className="accordion-metric-table__head">
+                                <span>Metric</span>
+                                <span>LLM</span>
+                                <span>Det</span>
+                                <span>Final</span>
+                              </div>
+                              {metricDefinitions.map((metric) => (
+                                <div className="accordion-metric-table__row" key={metric.key}>
+                                  <span>{metric.label}</span>
+                                  <span>{cr.semanticMetrics[metric.key].toFixed(1)}</span>
+                                  <span>{cr.deterministicMetrics[metric.key].toFixed(1)}</span>
+                                  <span>{cr.metrics[metric.key].toFixed(1)}</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="accordion-formula-strip">
+                              <span className="panel-label">Case score formula</span>
+                              <code>
+                                {buildCompositeFormula(cr.metrics, metricWeightDefaults, caseScore) ??
+                                  "0.35 × faithfulness + 0.30 × coverage + 0.20 × compliance + 0.15 × privacy"}
+                              </code>
+                            </div>
+
+                            {/* Text comparison */}
+                            <div className="accordion-compare">
+                              <div className="accordion-pane">
+                                <div className="accordion-pane__label">
+                                  <span className="panel-label">Reference output</span>
+                                </div>
+                                <div className="accordion-pane__text">
+                                  {cr.referenceText?.trim() ? (
+                                    <pre>{cr.referenceText}</pre>
+                                  ) : (
+                                    <p className="accordion-pane__empty">
+                                      Reference text not available. Re-run the evaluation after
+                                      redeploying the backend to populate this field.
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="accordion-pane">
+                                <div className="accordion-pane__label">
+                                  <span className="panel-label">Candidate summary</span>
+                                  <span>
+                                    {cr.source === "platform-model"
+                                      ? getModelLabel(cr.modelId)
+                                      : "Uploaded"}
+                                  </span>
+                                </div>
+                                <div className="accordion-pane__text">
+                                  <pre>{cr.candidateSummary}</pre>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Findings */}
+                            <div className="accordion-section-heading">
+                              <span className="panel-label">LLM judge findings</span>
+                            </div>
+                            <div className="accordion-findings">
+                              {(
+                                [
+                                  {
+                                    label: "Strengths",
+                                    items: cr.strengths,
+                                    tone: "good",
+                                    icon: (
+                                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                                        <path d="M2.5 7.5L5.5 10.5L11.5 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                      </svg>
+                                    ),
+                                  },
+                                  {
+                                    label: "Missing points",
+                                    items: cr.missingPoints,
+                                    tone: "warn",
+                                    icon: (
+                                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                                        <path d="M7 2v6M7 10v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                      </svg>
+                                    ),
+                                  },
+                                  {
+                                    label: "Issues",
+                                    items: cr.issues,
+                                    tone: "bad",
+                                    icon: (
+                                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                                        <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.6" />
+                                        <path d="M7 4.5v3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                                      </svg>
+                                    ),
+                                  },
+                                  {
+                                    label: "Policy findings",
+                                    items: cr.policyFindings,
+                                    tone: "neutral",
+                                    icon: (
+                                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                                        <rect x="2" y="2" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.6" />
+                                        <path d="M4.5 7h5M4.5 4.5h5M4.5 9.5h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                                      </svg>
+                                    ),
+                                  },
+                                ] as const
+                              )
+                                .filter((g) => g.items.length > 0)
+                                .map((g) => (
+                                  <div key={g.label} className={`accordion-finding-group accordion-finding-group--${g.tone}`}>
+                                    <span className="panel-label">{g.label}</span>
+                                    <ul>
+                                      {g.items.map((item, i) => (
+                                        <li key={i}>
+                                          <span className="accordion-finding-icon" aria-hidden="true">
+                                            {g.icon}
+                                          </span>
+                                          {item}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                ))}
+                            </div>
+
+                            {[
+                              {
+                                label: "Verified exact facts",
+                                items: cr.deterministicChecks.matchedSourceFacts,
+                              },
+                              {
+                                label: "Exact fact mismatches",
+                                items: cr.deterministicChecks.unsupportedCandidateFacts,
+                              },
+                              {
+                                label: "Missing benchmark facts",
+                                items: cr.deterministicChecks.missingReferenceFacts,
+                              },
+                              {
+                                label: "Missing benchmark terms",
+                                items: cr.deterministicChecks.missingReferenceKeywords,
+                              },
+                              {
+                                label: "Policy rule misses",
+                                items: [
+                                  ...cr.deterministicChecks.requiredRuleMisses,
+                                  ...cr.deterministicChecks.forbiddenRuleHits,
+                                ],
+                              },
+                              {
+                                label: "Privacy flags",
+                                items: cr.deterministicChecks.privacyFlags,
+                              },
+                            ].some((group) => group.items.length > 0) ? (
+                              <>
+                                <div className="accordion-section-heading accordion-section-heading--det">
+                                  <span className="panel-label">Deterministic checks</span>
+                                </div>
+                                <div className="accordion-det-grid">
+                                {[
+                                  {
+                                    label: "Verified exact facts",
+                                    items: cr.deterministicChecks.matchedSourceFacts,
+                                  },
+                                  {
+                                    label: "Exact fact mismatches",
+                                    items: cr.deterministicChecks.unsupportedCandidateFacts,
+                                  },
+                                  {
+                                    label: "Missing benchmark facts",
+                                    items: cr.deterministicChecks.missingReferenceFacts,
+                                  },
+                                  {
+                                    label: "Missing benchmark terms",
+                                    items: cr.deterministicChecks.missingReferenceKeywords,
+                                  },
+                                  {
+                                    label: "Policy rule misses",
+                                    items: [
+                                      ...cr.deterministicChecks.requiredRuleMisses,
+                                      ...cr.deterministicChecks.forbiddenRuleHits,
+                                    ],
+                                  },
+                                  {
+                                    label: "Privacy flags",
+                                    items: cr.deterministicChecks.privacyFlags,
+                                  },
+                                ]
+                                  .filter((group) => group.items.length > 0)
+                                  .map((group) => (
+                                    <div key={group.label} className="accordion-det-card">
+                                      <span className="panel-label">{group.label}</span>
+                                      <ul>
+                                        {group.items.map((item, index) => (
+                                          <li key={`${group.label}-${index}`}>{item}</li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </article>
+            ) : null}
+
+            {/* Evaluation setup & files */}
+            <section className="results-setup-row">
+              <article className="panel">
+                <div className="panel-header">
+                  <span className="panel-title">Evaluation setup</span>
+                </div>
+                <div className="detail-grid">
+                  <div>
+                    <span className="detail-label">Platform model</span>
+                    <strong>
+                      {lastEvaluation.outputSource === "platform-model"
+                        ? getModelLabel(lastEvaluation.modelId)
+                        : "Uploaded outputs"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="detail-label">Evaluator model</span>
+                    <strong>{getModelLabel(lastEvaluation.evaluatorModel)}</strong>
+                  </div>
+                  <div>
+                    <span className="detail-label">Processing time</span>
+                    <strong>{formatSeconds(lastEvaluation.processingSeconds)}</strong>
+                  </div>
+                  <div>
+                    <span className="detail-label">Total tokens</span>
+                    <strong>{formatTokenCount(lastEvaluation.tokenUsage?.totalTokens ?? null)}</strong>
+                  </div>
+                </div>
+                <div className="running-id" style={{ marginTop: 16 }}>
+                  <span className="panel-label">Evaluation ID</span>
+                  <code>{lastEvaluation.id}</code>
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="panel-header">
+                  <span className="panel-title">Files used</span>
+                </div>
+                <div className="file-columns">
+                  <FileListColumn label="Documents" files={lastEvaluation.documents} />
+                  <FileListColumn label="Reference outputs" files={lastEvaluation.referenceOutputs} />
+                  <FileListColumn label="Rules / policies" files={lastEvaluation.policyFiles} />
+                  {lastEvaluation.outputSource === "uploaded-outputs" ? (
+                    <FileListColumn label="AI outputs" files={lastEvaluation.aiOutputs} />
+                  ) : null}
+                </div>
+              </article>
+            </section>
           </>
-        )
-      ) : (
-        <article className="panel feature-panel">
-          <div className="empty-state">
-            <strong>No result yet</strong>
-            <span>Run an evaluation to see results here.</span>
-          </div>
-        </article>
-      )}
-    </>
-  );
+        )}
+      </>
+    );
+  };
 
   const renderGuideIndex = () => (
     <>
@@ -2665,8 +3348,9 @@ function App() {
           <span className="panel-label">Capability library</span>
           <h2>Open a capability guide</h2>
           <p>
-            Choose a capability below to open its evaluator guide. Each guide documents the real
-            runtime flow, inputs, and scoring logic for that capability.
+            Choose a capability below to inspect how the backend evaluator actually works. Each
+            guide documents the runtime pipeline, model calls, findings generation, and score
+            calculation for that capability.
           </p>
 
           <div className="guide-intro-stats">
