@@ -694,33 +694,62 @@ const RunningWorkflowPanel = ({
     description: string;
     state: "complete" | "active" | "pending";
   }>;
-}) => (
-  <article className="panel workflow-panel">
-    <div className="panel-header">
-      <span className="panel-title">{heading}</span>
-      <span className="workflow-live">Live</span>
-    </div>
+}) => {
+  const completedCount = stages.filter((stage) => stage.state === "complete").length;
+  const activeCount = stages.filter((stage) => stage.state === "active").length;
+  const progress = Math.round(
+    ((completedCount + activeCount * 0.5) / Math.max(1, stages.length)) * 100,
+  );
 
-    <p className="workflow-summary">{summary}</p>
+  return (
+    <article className="panel workflow-panel">
+      <div className="panel-header">
+        <span className="panel-title">{heading}</span>
+        <span className="workflow-live">
+          <span className="workflow-live__dot" /> Live
+        </span>
+      </div>
 
-    <div className="workflow-list">
-      {stages.map((stage, index) => (
-        <div
-          className={`workflow-step workflow-step--${stage.state}`}
-          key={`${stage.id}-${index}`}
-        >
-          <div className="workflow-step__marker">
-            <span />
-          </div>
-          <div className="workflow-step__body">
-            <strong>{stage.label}</strong>
-            <span>{stage.description}</span>
-          </div>
+      <p className="workflow-summary">{summary}</p>
+
+      <div className="workflow-progress">
+        <div className="workflow-progress__bar">
+          <span style={{ width: `${progress}%` }} />
         </div>
-      ))}
-    </div>
-  </article>
-);
+        <span className="workflow-progress__label">{progress}% complete</span>
+      </div>
+
+      <div className="workflow-list">
+        {stages.map((stage, index) => (
+          <div
+            className={`workflow-step workflow-step--${stage.state}`}
+            key={`${stage.id}-${index}`}
+          >
+            <div className="workflow-step__marker">
+              <span>
+                {stage.state === "complete" ? (
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path
+                      d="M2.5 6.5L5 9l4.5-5"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                ) : null}
+              </span>
+            </div>
+            <div className="workflow-step__body">
+              <strong>{stage.label}</strong>
+              <span>{stage.description}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+};
 
 const SummaryCard = ({
   label,
@@ -1159,6 +1188,7 @@ function App() {
   const [isSubmittingEvaluation, setIsSubmittingEvaluation] = useState(false);
   const [submissionPhase, setSubmissionPhase] = useState<SubmissionPhase>(null);
   const [pollingEvaluationId, setPollingEvaluationId] = useState<string | null>(null);
+  const isPollingRef = useRef(false);
   const [isDeletingEvaluation, setIsDeletingEvaluation] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -1361,44 +1391,53 @@ function App() {
   }, []);
 
   const pollEvaluation = async (evaluationId: string) => {
+    if (isPollingRef.current) {
+      return;
+    }
+    isPollingRef.current = true;
     setPollingEvaluationId(evaluationId);
 
     try {
       const response = await getEvaluation(evaluationId);
       const nextEvaluation = mapRemoteEvaluation(response.evaluation);
-
       setEvaluations((current) => upsertEvaluation(current, nextEvaluation));
       setSelectedEvaluationId(evaluationId);
-    } catch (error) {
-      setStatusMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to refresh the evaluation status.",
-      );
+    } catch {
+      // Swallow polling errors silently — the interval will retry shortly.
     } finally {
-      setPollingEvaluationId((current) =>
-        current === evaluationId ? null : current,
-      );
+      isPollingRef.current = false;
+      setPollingEvaluationId((current) => (current === evaluationId ? null : current));
     }
   };
 
+  // Continuous polling via setInterval so stage transitions are always visible.
+  // We use a ref for the evaluation ID so the interval callback never captures
+  // a stale closure while the React state updates asynchronously.
+  const runningEvaluationIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!lastEvaluation || lastEvaluation.status !== "RUNNING") {
-      return;
+    if (lastEvaluation?.status === "RUNNING") {
+      runningEvaluationIdRef.current = lastEvaluation.id;
+    } else {
+      runningEvaluationIdRef.current = null;
     }
+  }, [lastEvaluation]);
 
-    if (pollingEvaluationId === lastEvaluation.id) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      void pollEvaluation(lastEvaluation.id);
-    }, 2400);
+  useEffect(() => {
+    // Poll every 800 ms. The callback reads from the ref so it always targets
+    // the current running evaluation even after re-renders.
+    const interval = window.setInterval(() => {
+      const id = runningEvaluationIdRef.current;
+      if (id) {
+        void pollEvaluation(id);
+      }
+    }, 800);
 
     return () => {
-      window.clearTimeout(timer);
+      window.clearInterval(interval);
     };
-  }, [lastEvaluation, pollingEvaluationId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleDeleteEvaluation = async (evaluation: EvaluationRecord) => {
     if (evaluation.status === "RUNNING") {
@@ -1443,7 +1482,6 @@ function App() {
     setIsSubmittingEvaluation(true);
     setSubmissionPhase("uploading");
     setStatusMessage(null);
-    setView("results");
 
     try {
       const uploadSources = [
@@ -1500,6 +1538,7 @@ function App() {
       setEvaluations((current) => upsertEvaluation(current, pendingEvaluation));
       setSelectedEvaluationId(evaluationResponse.evaluationId);
       setStatusMessage("Evaluation started. Results will appear when the workflow completes.");
+      setView("results");
     } catch (error) {
       setStatusMessage(
         error instanceof Error ? error.message : "Unable to start the evaluation.",
@@ -1509,32 +1548,6 @@ function App() {
       setSubmissionPhase(null);
     }
   };
-
-  const getSubmissionStages = () =>
-    [
-      {
-        id: "uploading",
-        label: "Upload files",
-        description: "Sending source documents, reference outputs, and optional policy files to S3.",
-        state:
-          submissionPhase === "uploading"
-            ? "active"
-            : submissionPhase === "starting"
-              ? "complete"
-              : "pending",
-      },
-      {
-        id: "starting",
-        label: "Start workflow",
-        description: "Creating the evaluation job and handing it off to Step Functions.",
-        state: submissionPhase === "starting" ? "active" : "pending",
-      },
-    ] as Array<{
-      id: string;
-      label: string;
-      description: string;
-      state: "complete" | "active" | "pending";
-    }>;
 
   const getWorkflowStagesForEvaluation = (evaluation: EvaluationRecord) => {
     const stages =
@@ -1563,10 +1576,19 @@ function App() {
 
   const renderHome = () => (
     <>
-      <header className="screen-header">
+      <header className="screen-header hero-header">
         <div>
           <span className="screen-label">Dashboard</span>
-          <h1>Home</h1>
+          <h1>Welcome back</h1>
+          <p className="hero-subtitle">
+            Evaluate AI capabilities with deterministic, real-world workflows. Spin up an
+            assessment in minutes.
+          </p>
+        </div>
+        <div className="header-actions">
+          <button className="primary-button" onClick={openNewEvaluation} type="button">
+            + New evaluation
+          </button>
         </div>
       </header>
 
@@ -2026,6 +2048,24 @@ function App() {
       {step === 4 && renderTruthPackStep()}
       {step === 5 && renderReviewStep()}
 
+      {isSubmittingEvaluation ? (
+        <article className="panel submission-panel">
+          <div className="submission-panel__pulse" aria-hidden="true" />
+          <div className="submission-panel__body">
+            <span className="panel-label">Launching</span>
+            <strong>
+              {submissionPhase === "uploading"
+                ? "Uploading files to AWS S3..."
+                : "Starting the evaluation workflow..."}
+            </strong>
+            <span>
+              Hang tight — we&rsquo;re preparing your evaluation. The live workflow will appear in
+              a moment.
+            </span>
+          </div>
+        </article>
+      ) : null}
+
       <section className="wizard-actions">
         <button
           className="ghost-button"
@@ -2052,7 +2092,11 @@ function App() {
             onClick={runEvaluation}
             type="button"
           >
-            {isSubmittingEvaluation ? "Starting..." : "Run evaluation"}
+            {isSubmittingEvaluation
+              ? submissionPhase === "uploading"
+                ? "Uploading files..."
+                : "Starting workflow..."
+              : "Run evaluation"}
           </button>
         )}
       </section>
@@ -2085,46 +2129,7 @@ function App() {
 
       {statusMessage ? <div className="status-banner">{statusMessage}</div> : null}
 
-      {isSubmittingEvaluation ? (
-        <section className="content-grid">
-          <RunningWorkflowPanel
-            heading="Starting evaluation"
-            stages={getSubmissionStages()}
-            summary="The app is uploading the files and creating the evaluation job. This avoids the blank transition before the AWS workflow becomes visible."
-          />
-          <article className="panel">
-            <div className="panel-header">
-              <span className="panel-title">Current setup</span>
-            </div>
-            <div className="detail-grid">
-              <div>
-                <span className="detail-label">Output source</span>
-                <strong>
-                  {draft.outputSource === "platform-model"
-                    ? "Platform model"
-                    : "Uploaded AI outputs"}
-                </strong>
-              </div>
-              <div>
-                <span className="detail-label">Model / outputs</span>
-                <strong>
-                  {draft.outputSource === "platform-model"
-                    ? getModelLabel(draft.modelId)
-                    : `${draft.aiOutputs.length} uploaded files`}
-                </strong>
-              </div>
-              <div>
-                <span className="detail-label">Source documents</span>
-                <strong>{draft.documents.length}</strong>
-              </div>
-              <div>
-                <span className="detail-label">Reference outputs</span>
-                <strong>{draft.referenceOutputs.length}</strong>
-              </div>
-            </div>
-          </article>
-        </section>
-      ) : lastEvaluation ? (
+      {lastEvaluation ? (
         lastEvaluation.status === "RUNNING" ? (
           <>
             <section className="card-grid">
@@ -2411,21 +2416,21 @@ function App() {
         </div>
       </header>
 
-      <section className="guide-index-grid">
-        <article className="panel guide-chooser">
-          <span className="panel-label">Open guide</span>
-          <h2>Select a capability</h2>
+      <section className="guide-index-stack">
+        <article className="panel guide-intro-panel">
+          <span className="panel-label">Capability library</span>
+          <h2>Open a capability guide</h2>
           <p>
-            Choose a capability to open its evaluator guide. Each guide lives on its own page and
-            documents the real runtime flow, inputs, and scoring logic for that capability.
+            Choose a capability below to open its evaluator guide. Each guide documents the real
+            runtime flow, inputs, and scoring logic for that capability.
           </p>
 
-          <div className="guide-chooser__meta">
-            <div className="guide-chooser__stat">
+          <div className="guide-intro-stats">
+            <div className="guide-intro-stat">
               <span>Available now</span>
               <strong>1 guide</strong>
             </div>
-            <div className="guide-chooser__stat">
+            <div className="guide-intro-stat">
               <span>Current scope</span>
               <strong>Document summaries</strong>
             </div>
@@ -2435,7 +2440,7 @@ function App() {
         <article className="panel guide-directory">
           <div className="guide-directory__intro">
             <span className="panel-label">Available guides</span>
-            <strong>Capability library</strong>
+            <strong>Browse capabilities</strong>
           </div>
 
           <div className="guide-directory__list" role="list">
@@ -2453,7 +2458,7 @@ function App() {
               </div>
               <span className="guide-row__status">Active</span>
               <span className="guide-row__arrow" aria-hidden="true">
-                Open
+                Open →
               </span>
             </button>
           </div>
@@ -2466,15 +2471,15 @@ function App() {
     const guide = capabilityGuides[selectedGuideCapability];
 
     return (
-      <>
-        <header className="screen-header">
+      <div className="guide-detail-wrapper">
+        <header className="screen-header guide-detail-header">
           <div>
             <span className="screen-label">Guide</span>
             <h1>{guide.title}</h1>
           </div>
           <div className="header-actions">
             <button className="ghost-button" onClick={openGuideIndex} type="button">
-              Back to guides
+              ← Back to guides
             </button>
           </div>
         </header>
@@ -2503,7 +2508,7 @@ function App() {
             ))}
           </div>
         </article>
-      </>
+      </div>
     );
   };
 
@@ -2511,7 +2516,22 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">A</div>
+          <div className="brand-mark" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 2L3 7v10l9 5 9-5V7l-9-5z"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M3 7l9 5 9-5M12 12v10"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </div>
           <div>
             <span className="brand-label">Thesis MVP</span>
             <strong>AI Capability Tool</strong>
@@ -2528,7 +2548,22 @@ function App() {
               onClick={() => setIsDashboardNavOpen((current) => !current)}
               type="button"
             >
-              <span>Dashboard</span>
+              <span className="sidebar-link__inner">
+                <svg
+                  className="sidebar-icon"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+                  <rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+                  <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+                  <rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+                </svg>
+                Dashboard
+              </span>
               <span
                 className={`sidebar-group__chevron ${
                   isDashboardNavOpen ? "sidebar-group__chevron--open" : ""
@@ -2564,6 +2599,14 @@ function App() {
           <div className="sidebar-section">
             <span className="sidebar-section__label">Evaluate</span>
             <button className="sidebar-primary" onClick={openNewEvaluation} type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M12 5v14M5 12h14"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                />
+              </svg>
               Start evaluation
             </button>
           </div>
@@ -2577,15 +2620,41 @@ function App() {
               onClick={openGuideIndex}
               type="button"
             >
-              Capability guides
+              <span className="sidebar-link__inner">
+                <svg
+                  className="sidebar-icon"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M4 4h11a4 4 0 014 4v12H8a4 4 0 01-4-4V4z"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M8 8h7M8 12h7M8 16h4"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                Capability guides
+              </span>
             </button>
           </div>
         </nav>
 
         <div className="sidebar-panel">
+          <div className="sidebar-panel__pulse" aria-hidden="true">
+            <span />
+          </div>
           <span className="panel-label">Capability live</span>
           <strong>Document summarisation</strong>
-          <span className="sidebar-panel__meta">Real OpenAI generation and evaluator scoring</span>
+          <span className="sidebar-panel__meta">Real OpenAI generation & evaluator scoring</span>
         </div>
       </aside>
 
