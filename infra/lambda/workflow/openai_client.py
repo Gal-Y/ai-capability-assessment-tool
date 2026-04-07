@@ -49,7 +49,7 @@ def create_response(
     max_output_tokens=None,
     reasoning_effort="medium",
     verbosity="low",
-    temperature=0.2,
+    temperature=None,
     metadata=None,
 ):
     if not OPENAI_API_KEY:
@@ -65,9 +65,11 @@ def create_response(
                 "content": input_content,
             }
         ],
-        "temperature": temperature,
         "truncation": "disabled",
     }
+
+    if temperature is not None:
+        payload["temperature"] = temperature
 
     if reasoning_effort:
         payload["reasoning"] = {"effort": reasoning_effort}

@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type ChangeEvent,
@@ -432,6 +433,129 @@ const createPendingEvaluation = (
     policyFiles: groupedFiles.policyFiles.map(mapRemoteFile),
     aiOutputs: groupedFiles.aiOutputs.map(mapRemoteFile),
   };
+};
+
+const CustomSelect = ({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  options: ReadonlyArray<{ id: string; label: string }>;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const listboxId = useId();
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.id === value),
+  );
+  const selectedOption = options[selectedIndex] ?? options[0];
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, []);
+
+  const selectIndex = (index: number) => {
+    const next = options[(index + options.length) % options.length];
+    if (!next) {
+      return;
+    }
+    onChange(next.id);
+  };
+
+  const handleTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (!isOpen) {
+        setIsOpen(true);
+      } else {
+        selectIndex(selectedIndex + 1);
+      }
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!isOpen) {
+        setIsOpen(true);
+      } else {
+        selectIndex(selectedIndex - 1);
+      }
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setIsOpen((current) => !current);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      setIsOpen(false);
+    }
+  };
+
+  return (
+    <div className="custom-select" ref={containerRef}>
+      <button
+        aria-controls={listboxId}
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        aria-label={ariaLabel}
+        className={`custom-select__trigger ${isOpen ? "custom-select__trigger--open" : ""}`}
+        onClick={() => setIsOpen((current) => !current)}
+        onKeyDown={handleTriggerKeyDown}
+        type="button"
+      >
+        <span className="custom-select__value">{selectedOption?.label ?? value}</span>
+        <span className="custom-select__icon" aria-hidden="true" />
+      </button>
+
+      {isOpen ? (
+        <div className="custom-select__menu" id={listboxId} role="listbox">
+          {options.map((option) => {
+            const isSelected = option.id === value;
+
+            return (
+              <button
+                aria-selected={isSelected}
+                className={`custom-select__option ${
+                  isSelected ? "custom-select__option--active" : ""
+                }`}
+                key={option.id}
+                onClick={() => {
+                  onChange(option.id);
+                  setIsOpen(false);
+                }}
+                role="option"
+                type="button"
+              >
+                <span>{option.label}</span>
+                {isSelected ? (
+                  <span className="custom-select__check" aria-hidden="true">
+                    Selected
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
 };
 
 const SummaryCard = ({
@@ -1347,23 +1471,19 @@ function App() {
 
       {draft.outputSource === "platform-model" ? (
         <div className="form-grid">
-          <label className="field field--wide">
+          <div className="field field--wide">
             <span>Model</span>
-            <select
+            <CustomSelect
+              ariaLabel="Model"
+              onChange={(nextValue) => updateDraft("modelId", nextValue)}
+              options={availableModels}
               value={draft.modelId}
-              onChange={(event) => updateDraft("modelId", event.target.value)}
-            >
-              {availableModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label}
-                </option>
-              ))}
-            </select>
+            />
             <span className="panel-meta">
               This model will generate the summary before the evaluator scores it against the
               source document and reference output.
             </span>
-          </label>
+          </div>
         </div>
       ) : draft.outputSource === "uploaded-outputs" ? (
         <div className="form-grid">

@@ -240,7 +240,6 @@ def handler(event, _context):
             response_format=CASE_EVALUATION_FORMAT,
             max_output_tokens=1800,
             reasoning_effort="medium",
-            temperature=0.1,
             metadata={
                 "evaluation_id": event["evaluationId"],
                 "case_id": test_case["caseId"],

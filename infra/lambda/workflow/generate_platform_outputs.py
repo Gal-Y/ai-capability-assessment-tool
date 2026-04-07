@@ -68,7 +68,6 @@ def handler(event, _context):
             max_output_tokens=1200,
             reasoning_effort="low",
             verbosity="low",
-            temperature=0.2,
             metadata={
                 "evaluation_id": event["evaluationId"],
                 "case_id": test_case["caseId"],
