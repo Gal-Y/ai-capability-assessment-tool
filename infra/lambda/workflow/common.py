@@ -1,5 +1,7 @@
+import base64
 import hashlib
 import json
+import mimetypes
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -10,6 +12,7 @@ s3_client = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
 ARTIFACTS_BUCKET = os.environ.get("ARTIFACTS_BUCKET")
 EVALUATIONS_TABLE = os.environ.get("EVALUATIONS_TABLE")
+UPLOADS_BUCKET = os.environ.get("UPLOADS_BUCKET")
 
 
 def now_iso():
@@ -29,6 +32,34 @@ def write_artifact(state, suffix, payload):
         ContentType="application/json",
     )
     return key
+
+
+def read_uploaded_file(file_ref):
+    if not UPLOADS_BUCKET:
+        raise RuntimeError("UPLOADS_BUCKET is not configured")
+
+    response = s3_client.get_object(Bucket=UPLOADS_BUCKET, Key=file_ref["key"])
+    content_type = (
+        response.get("ContentType")
+        or mimetypes.guess_type(file_ref["name"])[0]
+        or "application/octet-stream"
+    )
+
+    return {
+        "name": file_ref["name"],
+        "contentType": content_type,
+        "bytes": response["Body"].read(),
+    }
+
+
+def to_input_file_item(file_ref):
+    uploaded = read_uploaded_file(file_ref)
+    encoded = base64.b64encode(uploaded["bytes"]).decode("ascii")
+    return {
+        "type": "input_file",
+        "filename": uploaded["name"],
+        "file_data": f"data:{uploaded['contentType']};base64,{encoded}",
+    }
 
 
 def stable_noise(seed, salt):

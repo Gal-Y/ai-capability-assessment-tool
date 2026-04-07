@@ -26,6 +26,7 @@ export type RemoteEvaluation = {
   createdAt: string;
   updatedAt?: string;
   status: string;
+  error?: string;
   capability: string;
   outputSource: OutputSource;
   documentCount?: number;
@@ -37,23 +38,32 @@ export type RemoteEvaluation = {
   policyFiles: RemoteFileRef[];
   aiOutputs: RemoteFileRef[];
   config?: {
-    audience?: string;
-    outputStyle?: string;
-    maxWords?: number;
-    riskLevel?: string;
     modelId?: string;
-    promptPreset?: string;
-    providedLatencySeconds?: string;
-    providedCostPerDocument?: string;
-    requiredSections?: string[];
-    excludedContent?: string[];
+    evaluatorModel?: string;
     policyText?: string;
-    redactSensitiveContent?: boolean;
   };
   result?: {
     scoredAt: string;
     readinessScore: number;
-    costPerDocument: number | null;
+    evaluatorModel?: string | null;
+    processingSeconds?: number | null;
+    tokenUsage?: {
+      generation?: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+      };
+      evaluation?: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+      };
+      total?: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+      };
+    };
     decision: "Ready" | "Conditional" | "Not Ready";
     metrics: {
       faithfulness: number;
@@ -63,6 +73,27 @@ export type RemoteEvaluation = {
       latency: number | null;
     };
     issues: string[];
+    strengths?: string[];
+    caseResults?: Array<{
+      caseId: string;
+      sourceDocument: string;
+      referenceOutput?: string | null;
+      candidateSummary: string;
+      source: OutputSource;
+      modelId?: string | null;
+      metrics: {
+        faithfulness: number;
+        coverage: number;
+        compliance: number;
+        privacy: number;
+      };
+      strengths?: string[];
+      missingPoints?: string[];
+      issues?: string[];
+      policyFindings?: string[];
+      generationLatencySeconds?: number | null;
+      evaluationLatencySeconds: number;
+    }>;
   };
 };
 

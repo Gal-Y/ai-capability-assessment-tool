@@ -8,7 +8,7 @@ This version is focused on the `Document Summarisation` capability and currently
 - a guided `Start evaluation` flow
 - support for `platform model` or `uploaded AI outputs`
 - uploads for source documents, reference outputs, and policy files
-- a thesis-aligned AWS MVP architecture defined in CDK
+- an OpenAI-backed evaluation workflow defined in AWS CDK
 
 ## Run locally
 
@@ -41,10 +41,9 @@ The repository now includes an AWS CDK stack for the thesis MVP architecture:
 2. User starts an evaluation through the API.
 3. Step Functions runs the MVP pipeline:
    - validate input manifest
-   - extract and normalise uploaded assets
    - build one summarisation test case per document
-   - either generate platform outputs or load uploaded AI outputs
-   - score the run and write a readiness result
+   - either generate platform summaries or load uploaded AI outputs
+   - score each case against the source document, reference output, and optional policy guidance
    - persist the final report and status
 
 ### Infrastructure Commands
@@ -90,8 +89,26 @@ These credentials should belong to a dedicated IAM user for deployment and allow
 - `GET /evaluations`
 - `GET /evaluations/{evaluationId}`
 
+### OpenAI setup
+
+The workflow Lambdas expect an `OPENAI_API_KEY` environment variable at deploy time.
+
+Example:
+
+```bash
+export OPENAI_API_KEY=your_key_here
+npm run infra:deploy
+```
+
+Optional:
+
+```bash
+export OPENAI_EVALUATOR_MODEL=gpt-5.4-mini
+```
+
 ### Notes
 
-- The workflow currently scaffolds the MVP pipeline with placeholder extraction/output-generation logic so the architecture is deployable before the full evaluation engine is wired in.
+- `platform-model` mode generates real summaries through the OpenAI Responses API.
+- The evaluator scores real candidate summaries against the source document, the approved reference output, and any optional policy guidance.
 - The stack uses permissive CORS for MVP convenience. Tighten this before any real production use.
 - `npm run build` should be run before deployment so the frontend assets exist in `dist/`.

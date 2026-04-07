@@ -22,6 +22,9 @@ export class AiCapabilityAssessmentToolStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
+    const openAiApiKey = process.env.OPENAI_API_KEY ?? "";
+    const openAiEvaluatorModel = process.env.OPENAI_EVALUATOR_MODEL ?? "gpt-5.4-mini";
+
     const uploadsBucket = new s3.Bucket(this, "UploadsBucket", {
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -159,17 +162,6 @@ export class AiCapabilityAssessmentToolStack extends Stack {
       },
     );
 
-    const extractAssetsFn = createPythonFunction(
-      "ExtractAssetsFunction",
-      "extract_assets.handler",
-      workflowLambdaCode,
-      {
-        UPLOADS_BUCKET: uploadsBucket.bucketName,
-        ARTIFACTS_BUCKET: artifactsBucket.bucketName,
-      },
-      Duration.minutes(1),
-    );
-
     const buildTestCasesFn = createPythonFunction(
       "BuildTestCasesFunction",
       "build_test_cases.handler",
@@ -185,9 +177,12 @@ export class AiCapabilityAssessmentToolStack extends Stack {
       "generate_platform_outputs.handler",
       workflowLambdaCode,
       {
+        OPENAI_API_KEY: openAiApiKey,
+        OPENAI_EVALUATOR_MODEL: openAiEvaluatorModel,
+        UPLOADS_BUCKET: uploadsBucket.bucketName,
         ARTIFACTS_BUCKET: artifactsBucket.bucketName,
       },
-      Duration.minutes(1),
+      Duration.minutes(3),
     );
 
     const loadUploadedOutputsFn = createPythonFunction(
@@ -205,9 +200,12 @@ export class AiCapabilityAssessmentToolStack extends Stack {
       "score_evaluation.handler",
       workflowLambdaCode,
       {
+        OPENAI_API_KEY: openAiApiKey,
+        OPENAI_EVALUATOR_MODEL: openAiEvaluatorModel,
+        UPLOADS_BUCKET: uploadsBucket.bucketName,
         ARTIFACTS_BUCKET: artifactsBucket.bucketName,
       },
-      Duration.minutes(1),
+      Duration.minutes(5),
     );
 
     const finalizeEvaluationFn = createPythonFunction(
@@ -221,13 +219,19 @@ export class AiCapabilityAssessmentToolStack extends Stack {
       Duration.minutes(1),
     );
 
+    const markFailedFn = createPythonFunction(
+      "MarkFailedFunction",
+      "mark_failed.handler",
+      workflowLambdaCode,
+      {
+        ARTIFACTS_BUCKET: artifactsBucket.bucketName,
+        EVALUATIONS_TABLE: evaluationsTable.tableName,
+      },
+      Duration.minutes(1),
+    );
+
     const validateTask = new tasks.LambdaInvoke(this, "ValidateInput", {
       lambdaFunction: validateInputFn,
-      payloadResponseOnly: true,
-    });
-
-    const extractTask = new tasks.LambdaInvoke(this, "ExtractAssets", {
-      lambdaFunction: extractAssetsFn,
       payloadResponseOnly: true,
     });
 
@@ -256,6 +260,18 @@ export class AiCapabilityAssessmentToolStack extends Stack {
       payloadResponseOnly: true,
     });
 
+    const failureTask = new tasks.LambdaInvoke(this, "MarkFailed", {
+      lambdaFunction: markFailedFn,
+      payloadResponseOnly: true,
+    });
+
+    validateTask.addCatch(failureTask, { resultPath: "$.workflowError" });
+    buildCasesTask.addCatch(failureTask, { resultPath: "$.workflowError" });
+    platformOutputsTask.addCatch(failureTask, { resultPath: "$.workflowError" });
+    uploadedOutputsTask.addCatch(failureTask, { resultPath: "$.workflowError" });
+    scoreTask.addCatch(failureTask, { resultPath: "$.workflowError" });
+    finalizeTask.addCatch(failureTask, { resultPath: "$.workflowError" });
+
     const outputChoice = new sfn.Choice(this, "ResolveOutputSource")
       .when(
         sfn.Condition.stringEquals("$.outputSource", "platform-model"),
@@ -264,7 +280,6 @@ export class AiCapabilityAssessmentToolStack extends Stack {
       .otherwise(uploadedOutputsTask);
 
     const definition = sfn.Chain.start(validateTask)
-      .next(extractTask)
       .next(buildCasesTask)
       .next(outputChoice.afterwards())
       .next(scoreTask)
@@ -286,21 +301,23 @@ export class AiCapabilityAssessmentToolStack extends Stack {
     );
 
     uploadsBucket.grantPut(presignUploadFn);
-    uploadsBucket.grantRead(extractAssetsFn);
+    uploadsBucket.grantRead(generatePlatformOutputsFn);
     uploadsBucket.grantRead(loadUploadedOutputsFn);
+    uploadsBucket.grantRead(scoreEvaluationFn);
 
     artifactsBucket.grantReadWrite(validateInputFn);
-    artifactsBucket.grantReadWrite(extractAssetsFn);
     artifactsBucket.grantReadWrite(buildTestCasesFn);
     artifactsBucket.grantReadWrite(generatePlatformOutputsFn);
     artifactsBucket.grantReadWrite(loadUploadedOutputsFn);
     artifactsBucket.grantReadWrite(scoreEvaluationFn);
     artifactsBucket.grantReadWrite(finalizeEvaluationFn);
+    artifactsBucket.grantReadWrite(markFailedFn);
 
     evaluationsTable.grantReadData(listEvaluationsFn);
     evaluationsTable.grantReadData(getEvaluationFn);
     evaluationsTable.grantReadWriteData(startEvaluationFn);
     evaluationsTable.grantReadWriteData(finalizeEvaluationFn);
+    evaluationsTable.grantReadWriteData(markFailedFn);
     stateMachine.grantStartExecution(startEvaluationFn);
 
     const httpApi = new apigwv2.HttpApi(this, "AiCapabilityAssessmentApi", {
