@@ -7,7 +7,12 @@ from common import (
     update_evaluation_item,
     write_artifact,
 )
-from openai_client import DEFAULT_EVALUATOR_MODEL, create_response, parse_json_output
+from openai_client import (
+    DEFAULT_EVALUATOR_MODEL,
+    create_response,
+    get_incomplete_reason,
+    parse_json_output,
+)
 
 
 THRESHOLDS = {
@@ -21,7 +26,6 @@ CASE_EVALUATION_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "candidateSummary": {"type": "string"},
         "scores": {
             "type": "object",
             "additionalProperties": False,
@@ -55,7 +59,6 @@ CASE_EVALUATION_SCHEMA = {
         },
     },
     "required": [
-        "candidateSummary",
         "scores",
         "strengths",
         "missingPoints",
@@ -130,6 +133,68 @@ def get_reference_text(test_case):
         return extract_readable_text(test_case["referenceOutputs"][0])
     except Exception:
         return None
+
+
+def get_candidate_summary_text(test_case, resolved_output):
+    if resolved_output["source"] == "platform-model":
+        return resolved_output["summaryText"].strip()
+
+    uploaded_output = test_case.get("uploadedOutput")
+    if not uploaded_output:
+        return "Candidate summary preview unavailable."
+
+    try:
+        extracted = extract_readable_text(uploaded_output)
+    except Exception:
+        extracted = None
+
+    return extracted or "Candidate summary preview unavailable for this file type."
+
+
+def merge_usage(total_usage, usage):
+    total_usage["input_tokens"] += int(usage.get("input_tokens", 0))
+    total_usage["output_tokens"] += int(usage.get("output_tokens", 0))
+    total_usage["total_tokens"] += int(usage.get("total_tokens", 0))
+
+
+def score_case_with_retries(event, evaluator_model, test_case, resolved_output, policy_text):
+    attempts = [1200, 2200, 3600]
+    total_latency_seconds = 0.0
+    total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    last_error = None
+
+    for max_output_tokens in attempts:
+        response_payload, latency_seconds = create_response(
+            model=evaluator_model,
+            instructions=CASE_EVALUATION_INSTRUCTIONS,
+            input_content=build_case_content(test_case, resolved_output, policy_text),
+            response_format=CASE_EVALUATION_FORMAT,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort="medium",
+            metadata={
+                "evaluation_id": event["evaluationId"],
+                "case_id": test_case["caseId"],
+                "phase": "evaluation",
+            },
+        )
+        total_latency_seconds += latency_seconds
+        merge_usage(total_usage, response_payload.get("usage", {}))
+
+        try:
+            evaluation = parse_json_output(response_payload)
+            return evaluation, total_latency_seconds, total_usage
+        except RuntimeError as error:
+            last_error = error
+            should_retry = (
+                get_incomplete_reason(response_payload) == "max_output_tokens"
+                or "invalid JSON" in str(error)
+            )
+            if not should_retry or max_output_tokens == attempts[-1]:
+                break
+
+    raise RuntimeError(
+        f"Evaluator response could not be parsed as structured JSON after retries: {last_error}"
+    )
 
 
 def build_case_content(test_case, resolved_output, policy_text):
@@ -276,27 +341,19 @@ def handler(event, _context):
         if not resolved_output:
             raise ValueError(f"No resolved output found for {test_case['caseId']}")
 
-        response_payload, case_latency_seconds = create_response(
-            model=evaluator_model,
-            instructions=CASE_EVALUATION_INSTRUCTIONS,
-            input_content=build_case_content(test_case, resolved_output, policy_text),
-            response_format=CASE_EVALUATION_FORMAT,
-            max_output_tokens=1800,
-            reasoning_effort="medium",
-            metadata={
-                "evaluation_id": event["evaluationId"],
-                "case_id": test_case["caseId"],
-                "phase": "evaluation",
-            },
+        evaluation, case_latency_seconds, case_usage = score_case_with_retries(
+            event,
+            evaluator_model,
+            test_case,
+            resolved_output,
+            policy_text,
         )
-        evaluation = parse_json_output(response_payload)
         normalized_scores = normalize_case_scores(evaluation["scores"])
-        usage = response_payload.get("usage", {})
 
         evaluation_latency_seconds += case_latency_seconds
-        evaluation_input_tokens += int(usage.get("input_tokens", 0))
-        evaluation_output_tokens += int(usage.get("output_tokens", 0))
-        evaluation_total_tokens += int(usage.get("total_tokens", 0))
+        evaluation_input_tokens += int(case_usage["input_tokens"])
+        evaluation_output_tokens += int(case_usage["output_tokens"])
+        evaluation_total_tokens += int(case_usage["total_tokens"])
 
         if resolved_output["source"] == "platform-model":
             generation_latency_seconds += float(resolved_output.get("latencySeconds", 0))
@@ -315,7 +372,9 @@ def handler(event, _context):
                     else None
                 ),
                 "referenceText": get_reference_text(test_case),
-                "candidateSummary": evaluation["candidateSummary"].strip(),
+                "candidateSummary": get_candidate_summary_text(
+                    test_case, resolved_output
+                ),
                 "source": resolved_output["source"],
                 "modelId": resolved_output.get("modelId"),
                 "metrics": normalized_scores,

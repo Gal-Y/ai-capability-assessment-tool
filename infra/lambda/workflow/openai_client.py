@@ -29,12 +29,22 @@ def extract_output_text(response_payload):
     raise RuntimeError("OpenAI response did not include output text")
 
 
+def get_incomplete_reason(response_payload):
+    details = response_payload.get("incomplete_details") or {}
+    return details.get("reason")
+
+
 def parse_json_output(response_payload):
     output_text = extract_output_text(response_payload)
 
     try:
         return json.loads(output_text)
     except json.JSONDecodeError as error:
+        incomplete_reason = get_incomplete_reason(response_payload)
+        if incomplete_reason == "max_output_tokens":
+            raise RuntimeError(
+                "OpenAI response was truncated after hitting max_output_tokens"
+            ) from error
         raise RuntimeError(
             f"OpenAI returned invalid JSON: {error.msg}"
         ) from error
