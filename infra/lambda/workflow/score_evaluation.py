@@ -73,6 +73,7 @@ Scoring rules:
 - Use any supplied policy files or typed policy guidance as extra compliance constraints.
 - The candidate summary may be provided as plain text or as an attached file. If it is a file, read it first and evaluate the readable summary text it contains.
 - Be strict about hallucinations, contradictions, and misleading omissions.
+- Return integer scores on a 0 to 100 scale, where 100 is best. Do not use a 1 to 10 scale.
 - Keep findings short and concrete.
 
 Return valid JSON only."""
@@ -96,6 +97,23 @@ def dedupe_ordered(items, limit):
             break
 
     return ordered
+
+
+def normalize_case_scores(raw_scores):
+    scores = {
+        "faithfulness": int(raw_scores["faithfulness"]),
+        "coverage": int(raw_scores["coverage"]),
+        "compliance": int(raw_scores["compliance"]),
+        "privacy": int(raw_scores["privacy"]),
+    }
+
+    if scores and max(scores.values()) <= 10:
+        scores = {name: value * 10 for name, value in scores.items()}
+
+    return {
+        name: max(0, min(100, value))
+        for name, value in scores.items()
+    }
 
 
 def build_case_content(test_case, resolved_output, policy_text):
@@ -256,6 +274,7 @@ def handler(event, _context):
             },
         )
         evaluation = parse_json_output(response_payload)
+        normalized_scores = normalize_case_scores(evaluation["scores"])
         usage = response_payload.get("usage", {})
 
         evaluation_latency_seconds += case_latency_seconds
@@ -282,12 +301,7 @@ def handler(event, _context):
                 "candidateSummary": evaluation["candidateSummary"].strip(),
                 "source": resolved_output["source"],
                 "modelId": resolved_output.get("modelId"),
-                "metrics": {
-                    "faithfulness": int(evaluation["scores"]["faithfulness"]),
-                    "coverage": int(evaluation["scores"]["coverage"]),
-                    "compliance": int(evaluation["scores"]["compliance"]),
-                    "privacy": int(evaluation["scores"]["privacy"]),
-                },
+                "metrics": normalized_scores,
                 "strengths": dedupe_ordered(evaluation["strengths"], 3),
                 "missingPoints": dedupe_ordered(evaluation["missingPoints"], 5),
                 "issues": dedupe_ordered(evaluation["issues"], 5),

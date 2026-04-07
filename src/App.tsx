@@ -399,41 +399,131 @@ const upsertEvaluation = (
 const getModelLabel = (modelId: string | null | undefined) =>
   availableModels.find((model) => model.id === modelId)?.label ?? modelId ?? "Not set";
 
-const mapRemoteEvaluation = (evaluation: RemoteEvaluation): EvaluationRecord => ({
-  id: evaluation.evaluationId,
-  createdAt: evaluation.createdAt,
-  status: toEvaluationStatus(evaluation.status),
-  workflowStage: evaluation.workflowStage ?? (evaluation.status === "FAILED" ? "FAILED" : "QUEUED"),
-  capability: normalizeCapability(evaluation.capability),
-  outputSource: evaluation.outputSource,
-  documentCount: evaluation.documentCount ?? evaluation.documents.length,
-  referenceCount: evaluation.referenceCount ?? evaluation.referenceOutputs.length,
-  policyCount: evaluation.policyCount ?? evaluation.policyFiles.length,
-  outputCount:
-    evaluation.outputCount ??
-    (evaluation.outputSource === "uploaded-outputs"
-      ? evaluation.aiOutputs.length
-      : evaluation.documents.length),
-  modelId:
-    evaluation.outputSource === "platform-model"
-      ? evaluation.config?.modelId ?? defaultModelId
-      : null,
-  evaluatorModel: evaluation.result?.evaluatorModel ?? null,
-  processingSeconds: evaluation.result?.processingSeconds ?? null,
-  tokenUsage: evaluation.result?.tokenUsage?.total ?? null,
-  readinessScore: evaluation.result?.readinessScore ?? null,
-  decision: evaluation.result?.decision ?? null,
-  metrics: {
-    faithfulness: evaluation.result?.metrics.faithfulness ?? null,
-    coverage: evaluation.result?.metrics.coverage ?? null,
-    compliance: evaluation.result?.metrics.compliance ?? null,
-    privacy: evaluation.result?.metrics.privacy ?? null,
-    latency: evaluation.result?.metrics.latency ?? null,
-  },
-  issues: evaluation.result?.issues ?? (evaluation.error ? [evaluation.error] : []),
-  strengths: evaluation.result?.strengths ?? [],
-  caseResults:
-    evaluation.result?.caseResults?.map((caseResult) => ({
+const isFiniteNumber = (value: number | null | undefined): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const getDecisionFromMetrics = (metrics: {
+  faithfulness: number;
+  coverage: number;
+  compliance: number;
+  privacy: number;
+}): Decision => {
+  const passes = (
+    Object.entries(thresholds) as Array<[keyof typeof thresholds, number]>
+  ).every(([name, threshold]) => metrics[name] >= threshold);
+  const nearPass = (
+    Object.entries(thresholds) as Array<[keyof typeof thresholds, number]>
+  ).every(([name, threshold]) => metrics[name] >= threshold - 4);
+
+  if (passes) {
+    return "Ready";
+  }
+
+  return nearPass ? "Conditional" : "Not Ready";
+};
+
+const normalizeLegacyResultScale = (evaluation: RemoteEvaluation) => {
+  const metrics = evaluation.result?.metrics;
+  const caseResults = evaluation.result?.caseResults ?? [];
+  const metricValues = [
+    metrics?.faithfulness,
+    metrics?.coverage,
+    metrics?.compliance,
+    metrics?.privacy,
+    ...caseResults.flatMap((caseResult) => [
+      caseResult.metrics.faithfulness,
+      caseResult.metrics.coverage,
+      caseResult.metrics.compliance,
+      caseResult.metrics.privacy,
+    ]),
+  ].filter(isFiniteNumber);
+
+  const isLegacyTenPointScale =
+    metricValues.length > 0 &&
+    metricValues.every((value) => value >= 0 && value <= 10) &&
+    (!isFiniteNumber(evaluation.result?.readinessScore) ||
+      evaluation.result!.readinessScore <= 10);
+
+  if (!isLegacyTenPointScale) {
+    return {
+      readinessScore: evaluation.result?.readinessScore ?? null,
+      decision: evaluation.result?.decision ?? null,
+      metrics: metrics ?? null,
+      caseResults,
+    };
+  }
+
+  const normalizedMetrics = metrics
+    ? {
+        faithfulness: metrics.faithfulness * 10,
+        coverage: metrics.coverage * 10,
+        compliance: metrics.compliance * 10,
+        privacy: metrics.privacy * 10,
+        latency: metrics.latency,
+      }
+    : null;
+
+  return {
+    readinessScore:
+      evaluation.result?.readinessScore === undefined ||
+      evaluation.result?.readinessScore === null
+        ? null
+        : evaluation.result.readinessScore * 10,
+    decision:
+      normalizedMetrics === null
+        ? evaluation.result?.decision ?? null
+        : getDecisionFromMetrics(normalizedMetrics),
+    metrics: normalizedMetrics,
+    caseResults: caseResults.map((caseResult) => ({
+      ...caseResult,
+      metrics: {
+        faithfulness: caseResult.metrics.faithfulness * 10,
+        coverage: caseResult.metrics.coverage * 10,
+        compliance: caseResult.metrics.compliance * 10,
+        privacy: caseResult.metrics.privacy * 10,
+      },
+    })),
+  };
+};
+
+const mapRemoteEvaluation = (evaluation: RemoteEvaluation): EvaluationRecord => {
+  const normalizedResult = normalizeLegacyResultScale(evaluation);
+
+  return {
+    id: evaluation.evaluationId,
+    createdAt: evaluation.createdAt,
+    status: toEvaluationStatus(evaluation.status),
+    workflowStage:
+      evaluation.workflowStage ?? (evaluation.status === "FAILED" ? "FAILED" : "QUEUED"),
+    capability: normalizeCapability(evaluation.capability),
+    outputSource: evaluation.outputSource,
+    documentCount: evaluation.documentCount ?? evaluation.documents.length,
+    referenceCount: evaluation.referenceCount ?? evaluation.referenceOutputs.length,
+    policyCount: evaluation.policyCount ?? evaluation.policyFiles.length,
+    outputCount:
+      evaluation.outputCount ??
+      (evaluation.outputSource === "uploaded-outputs"
+        ? evaluation.aiOutputs.length
+        : evaluation.documents.length),
+    modelId:
+      evaluation.outputSource === "platform-model"
+        ? evaluation.config?.modelId ?? defaultModelId
+        : null,
+    evaluatorModel: evaluation.result?.evaluatorModel ?? null,
+    processingSeconds: evaluation.result?.processingSeconds ?? null,
+    tokenUsage: evaluation.result?.tokenUsage?.total ?? null,
+    readinessScore: normalizedResult.readinessScore,
+    decision: normalizedResult.decision,
+    metrics: {
+      faithfulness: normalizedResult.metrics?.faithfulness ?? null,
+      coverage: normalizedResult.metrics?.coverage ?? null,
+      compliance: normalizedResult.metrics?.compliance ?? null,
+      privacy: normalizedResult.metrics?.privacy ?? null,
+      latency: normalizedResult.metrics?.latency ?? null,
+    },
+    issues: evaluation.result?.issues ?? (evaluation.error ? [evaluation.error] : []),
+    strengths: evaluation.result?.strengths ?? [],
+    caseResults: normalizedResult.caseResults.map((caseResult) => ({
       caseId: caseResult.caseId,
       sourceDocument: caseResult.sourceDocument,
       referenceOutput: caseResult.referenceOutput ?? null,
@@ -447,12 +537,13 @@ const mapRemoteEvaluation = (evaluation: RemoteEvaluation): EvaluationRecord => 
       policyFindings: caseResult.policyFindings ?? [],
       generationLatencySeconds: caseResult.generationLatencySeconds ?? null,
       evaluationLatencySeconds: caseResult.evaluationLatencySeconds,
-    })) ?? [],
-  documents: evaluation.documents.map(mapRemoteFile),
-  referenceOutputs: evaluation.referenceOutputs.map(mapRemoteFile),
-  policyFiles: evaluation.policyFiles.map(mapRemoteFile),
-  aiOutputs: evaluation.aiOutputs.map(mapRemoteFile),
-});
+    })),
+    documents: evaluation.documents.map(mapRemoteFile),
+    referenceOutputs: evaluation.referenceOutputs.map(mapRemoteFile),
+    policyFiles: evaluation.policyFiles.map(mapRemoteFile),
+    aiOutputs: evaluation.aiOutputs.map(mapRemoteFile),
+  };
+};
 
 const formatPercent = (value: number) => `${value.toFixed(1)}%`;
 const formatLatency = (value: number | null) =>
@@ -500,6 +591,11 @@ const getWorkflowStageMeta = (stage: string, outputSource: OutputSource) => {
     }
   );
 };
+
+const getWorkflowStageSequence = (outputSource: OutputSource) =>
+  outputSource === "platform-model"
+    ? ["QUEUED", "VALIDATING_INPUT", "BUILDING_CASES", "GENERATING_OUTPUTS", "SCORING"]
+    : ["QUEUED", "VALIDATING_INPUT", "BUILDING_CASES", "LOADING_OUTPUTS", "SCORING"];
 
 const createPendingEvaluation = (
   evaluationId: string,
@@ -1188,6 +1284,7 @@ function App() {
   const [isSubmittingEvaluation, setIsSubmittingEvaluation] = useState(false);
   const [submissionPhase, setSubmissionPhase] = useState<SubmissionPhase>(null);
   const [pollingEvaluationId, setPollingEvaluationId] = useState<string | null>(null);
+  const [workflowClock, setWorkflowClock] = useState(() => Date.now());
   const isPollingRef = useRef(false);
   const [isDeletingEvaluation, setIsDeletingEvaluation] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -1431,13 +1528,27 @@ function App() {
       if (id) {
         void pollEvaluation(id);
       }
-    }, 800);
+    }, 350);
 
     return () => {
       window.clearInterval(interval);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (lastEvaluation?.status !== "RUNNING") {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setWorkflowClock(Date.now());
+    }, 450);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [lastEvaluation?.id, lastEvaluation?.status]);
 
   const handleDeleteEvaluation = async (evaluation: EvaluationRecord) => {
     if (evaluation.status === "RUNNING") {
@@ -1539,6 +1650,7 @@ function App() {
       setSelectedEvaluationId(evaluationResponse.evaluationId);
       setStatusMessage("Evaluation started. Results will appear when the workflow completes.");
       setView("results");
+      void pollEvaluation(evaluationResponse.evaluationId);
     } catch (error) {
       setStatusMessage(
         error instanceof Error ? error.message : "Unable to start the evaluation.",
@@ -1550,11 +1662,33 @@ function App() {
   };
 
   const getWorkflowStagesForEvaluation = (evaluation: EvaluationRecord) => {
-    const stages =
-      evaluation.outputSource === "platform-model"
-        ? workflowStages.filter((stage) => stage.id !== "LOADING_OUTPUTS")
-        : workflowStages.filter((stage) => stage.id !== "GENERATING_OUTPUTS");
-    const currentIndex = stages.findIndex((stage) => stage.id === evaluation.workflowStage);
+    const stageSequence = getWorkflowStageSequence(evaluation.outputSource);
+    const stages = workflowStages.filter((stage) => stageSequence.includes(stage.id));
+    const actualStage = getWorkflowStageMeta(
+      evaluation.workflowStage,
+      evaluation.outputSource,
+    ).id;
+    const elapsedMs = Math.max(
+      0,
+      workflowClock - new Date(evaluation.createdAt).getTime(),
+    );
+    const syntheticStage =
+      elapsedMs >= 6200
+        ? stageSequence[stageSequence.length - 1]
+        : elapsedMs >= 3000
+          ? stageSequence[3]
+          : elapsedMs >= 1800
+            ? stageSequence[2]
+            : elapsedMs >= 900
+              ? stageSequence[1]
+              : stageSequence[0];
+    const actualIndex = stageSequence.indexOf(actualStage);
+    const syntheticIndex = stageSequence.indexOf(syntheticStage);
+    const currentStageId =
+      actualIndex === -1
+        ? syntheticStage
+        : stageSequence[Math.max(actualIndex, syntheticIndex)] ?? actualStage;
+    const currentIndex = stages.findIndex((stage) => stage.id === currentStageId);
 
     return stages.map((stage, index) => ({
       ...stage,
@@ -2132,10 +2266,21 @@ function App() {
       {lastEvaluation ? (
         lastEvaluation.status === "RUNNING" ? (
           <>
+            {(() => {
+              const displayedStage =
+                getWorkflowStagesForEvaluation(lastEvaluation).find((stage) => stage.state === "active")
+                  ?.id ?? lastEvaluation.workflowStage;
+              const displayedStageMeta = getWorkflowStageMeta(
+                displayedStage,
+                lastEvaluation.outputSource,
+              );
+
+              return (
+                <>
             <section className="card-grid">
               <SummaryCard
                 label="Status"
-                value={getWorkflowStageMeta(lastEvaluation.workflowStage, lastEvaluation.outputSource).label}
+                value={displayedStageMeta.label}
                 meta="Workflow stage"
               />
               <SummaryCard
@@ -2166,10 +2311,7 @@ function App() {
               <RunningWorkflowPanel
                 heading="Evaluation in progress"
                 stages={getWorkflowStagesForEvaluation(lastEvaluation)}
-                summary={
-                  getWorkflowStageMeta(lastEvaluation.workflowStage, lastEvaluation.outputSource)
-                    .description
-                }
+                summary={displayedStageMeta.description}
               />
 
               <article className="panel">
@@ -2200,6 +2342,9 @@ function App() {
                 </div>
               </article>
             </section>
+                </>
+              );
+            })()}
           </>
         ) : lastEvaluation.status === "FAILED" ? (
           <section className="content-grid">
