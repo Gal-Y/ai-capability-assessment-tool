@@ -42,6 +42,8 @@ export type RemoteEvaluation = {
     modelId?: string;
     evaluatorModel?: string;
     policyText?: string;
+    evaluationRules?: string[];
+    generationInstructions?: string;
   };
   result?: {
     scoredAt: string;
@@ -79,11 +81,23 @@ export type RemoteEvaluation = {
       compliance: number;
       privacy: number;
     };
+    semanticMetricReasons?: {
+      faithfulness?: string[];
+      coverage?: string[];
+      compliance?: string[];
+      privacy?: string[];
+    };
     deterministicMetrics?: {
       faithfulness: number;
       coverage: number;
       compliance: number;
       privacy: number;
+    };
+    deterministicMetricReasons?: {
+      faithfulness?: string[];
+      coverage?: string[];
+      compliance?: string[];
+      privacy?: string[];
     };
     scoreBreakdown?: {
       judgeWeights: {
@@ -123,11 +137,23 @@ export type RemoteEvaluation = {
         compliance: number;
         privacy: number;
       };
+      semanticMetricReasons?: {
+        faithfulness?: string[];
+        coverage?: string[];
+        compliance?: string[];
+        privacy?: string[];
+      };
       deterministicMetrics?: {
         faithfulness: number;
         coverage: number;
         compliance: number;
         privacy: number;
+      };
+      deterministicMetricReasons?: {
+        faithfulness?: string[];
+        coverage?: string[];
+        compliance?: string[];
+        privacy?: string[];
       };
       deterministicChecks?: {
         matchedSourceFacts?: string[];

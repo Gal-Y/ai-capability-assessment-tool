@@ -23,10 +23,16 @@ type StepId = 1 | 2 | 3 | 4 | 5;
 type Decision = "Ready" | "Conditional" | "Not Ready";
 type EvaluationStatus = "RUNNING" | "COMPLETED" | "FAILED";
 type Tone = "good" | "warn" | "bad" | "neutral";
+type MetricKey = "faithfulness" | "coverage" | "compliance" | "privacy";
+type EvaluationRuleId =
+  | "include_key_numeric_facts"
+  | "redact_contact_details"
+  | "use_required_sections";
 type OutputSource = "platform-model" | "uploaded-outputs";
 type UploadFieldKey = "documents" | "referenceOutputs" | "policyFiles" | "aiOutputs";
 type SubmissionPhase = "uploading" | "starting" | null;
 type GuideCapabilityId = "document-summarisation";
+type GuideBackTarget = "guide-index" | "guide-overview" | "results";
 
 type UploadItem = {
   name: string;
@@ -68,7 +74,8 @@ type EvaluationDraft = {
   referenceOutputs: UploadItem[];
   policyFiles: UploadItem[];
   aiOutputs: UploadItem[];
-  policyText: string;
+  evaluationRules: EvaluationRuleId[];
+  generationInstructions: string;
   modelId: string;
 };
 
@@ -92,12 +99,14 @@ type CaseResult = {
     compliance: number;
     privacy: number;
   };
+  semanticMetricReasons: Record<MetricKey, string[]>;
   deterministicMetrics: {
     faithfulness: number;
     coverage: number;
     compliance: number;
     privacy: number;
   };
+  deterministicMetricReasons: Record<MetricKey, string[]>;
   deterministicChecks: {
     matchedSourceFacts: string[];
     unsupportedCandidateFacts: string[];
@@ -152,12 +161,14 @@ type EvaluationRecord = {
     compliance: number | null;
     privacy: number | null;
   };
+  semanticMetricReasons: Record<MetricKey, string[]>;
   deterministicMetrics: {
     faithfulness: number | null;
     coverage: number | null;
     compliance: number | null;
     privacy: number | null;
   };
+  deterministicMetricReasons: Record<MetricKey, string[]>;
   scoreBreakdown: {
     judgeWeights: {
       semantic: number;
@@ -181,6 +192,8 @@ type EvaluationRecord = {
   referenceOutputs: UploadItem[];
   policyFiles: UploadItem[];
   aiOutputs: UploadItem[];
+  evaluationRules: EvaluationRuleId[];
+  generationInstructions: string;
 };
 
 const thresholds = {
@@ -204,26 +217,33 @@ const metricWeightDefaults = {
 
 const metricDefinitions = [
   {
-    key: "faithfulness",
+    key: "faithfulness" as MetricKey,
     label: "Faithfulness",
     description: "Accuracy relative to the source document",
   },
   {
-    key: "coverage",
+    key: "coverage" as MetricKey,
     label: "Coverage",
     description: "Completeness vs. the reference benchmark",
   },
   {
-    key: "compliance",
+    key: "compliance" as MetricKey,
     label: "Compliance",
-    description: "Adherence to policy guidance",
+    description: "Adherence to configured evaluation rules",
   },
   {
-    key: "privacy",
+    key: "privacy" as MetricKey,
     label: "Privacy",
     description: "Avoidance of sensitive content",
   },
 ] as const;
+
+const emptyMetricReasonRecord = (): Record<MetricKey, string[]> => ({
+  faithfulness: [],
+  coverage: [],
+  compliance: [],
+  privacy: [],
+});
 
 const availableModels = [
   { id: "gpt-5.4", label: "GPT-5.4" },
@@ -241,11 +261,40 @@ const workflowStages = [
   { id: "BUILDING_CASES", label: "Build cases", description: "Pairing each source document with its benchmark summary." },
   { id: "GENERATING_OUTPUTS", label: "Generate outputs", description: "Using the selected platform model to create candidate summaries." },
   { id: "LOADING_OUTPUTS", label: "Load outputs", description: "Loading uploaded AI summaries for scoring." },
-  { id: "SCORING", label: "Score with evaluator", description: "Comparing each candidate against the source document, reference output, and policy guidance." },
+  { id: "SCORING", label: "Score with evaluator", description: "Comparing each candidate against the source document, reference output, evaluation rules, and policy context." },
   { id: "COMPLETED", label: "Final report", description: "Writing the completed evaluation report and results." },
 ] as const;
 
-const policyGuidancePresets = [
+const evaluationRulePresets: Array<{
+  id: EvaluationRuleId;
+  title: string;
+  description: string;
+  affects: string;
+}> = [
+  {
+    id: "include_key_numeric_facts",
+    title: "Include key numeric facts",
+    description:
+      "Checks whether key numeric facts, entitlements, limits, and response times are actually preserved.",
+    affects: "Coverage + Compliance",
+  },
+  {
+    id: "redact_contact_details",
+    title: "Redact contact details",
+    description:
+      "Blocks direct emails, phone numbers, URLs, and similar contact endpoints when the summary should stay abstracted.",
+    affects: "Privacy + Compliance",
+  },
+  {
+    id: "use_required_sections",
+    title: "Use required sections",
+    description:
+      "Requires the summary to use the standard sections Key points, Notice requirements, Approval process, and Escalation.",
+    affects: "Compliance",
+  },
+] as const;
+
+const generationInstructionPresets = [
   {
     id: "executive-brief",
     title: "Executive brief",
@@ -290,19 +339,20 @@ const capabilityGuides: Record<
         title: "Runtime overview",
         paragraphs: [
           "A document-summarisation run is an AWS Step Functions workflow with a small set of Lambda stages. The workflow does not currently build a separate expected-answer rubric JSON before scoring.",
-          "Instead, each case is scored in a single evaluator call that sees the source document, the reference output, any optional policy guidance, and the candidate summary together.",
+          "Instead, each case is scored in a single evaluator call that sees the source document, the reference output, any configured evaluation rules and supporting policy files, and the candidate summary together.",
         ],
       },
       {
         title: "What the backend treats as inputs",
         paragraphs: [
-          "The source document is the ground truth for factual accuracy. The reference output is the benchmark for what strong coverage should include. Optional policy guidance is treated as extra compliance or privacy constraints.",
-          "The candidate summary comes from one of two places: either the platform model generates it during the workflow, or the user uploads it directly and the workflow reads it as the candidate output.",
+          "The source document is the ground truth for factual accuracy. The reference output is the benchmark for what strong coverage should include. Evaluation rules are the measurable output requirements that shape compliance and privacy checks.",
+          "Supporting policy files provide additional context. The candidate summary comes from one of two places: either the platform model generates it during the workflow, or the user uploads it directly and the workflow reads it as the candidate output.",
         ],
         bullets: [
           "Source document: truth source for faithfulness.",
           "Reference output: benchmark for coverage and usefulness.",
-          "Policy guidance: optional extra constraints only.",
+          "Evaluation rules: explicit output requirements to enforce.",
+          "Generation instructions: extra prompt steering for style and emphasis.",
           "Candidate output: generated by the platform model or loaded from uploaded AI outputs.",
         ],
       },
@@ -323,15 +373,15 @@ const capabilityGuides: Record<
       {
         title: "Stage 3. resolve candidate output",
         paragraphs: [
-          "In platform-model mode, `generate_platform_outputs` calls the selected OpenAI model with the system instruction `summarise this document`, the attached source document, and any optional policy guidance. The response text becomes the candidate summary for that case.",
+          "In platform-model mode, `generate_platform_outputs` calls the selected OpenAI model with the system instruction `summarise this document`, the attached source document, any selected evaluation rules, optional policy files, and any extra generation instructions. The response text becomes the candidate summary for that case.",
           "In uploaded-output mode, `load_uploaded_outputs` skips generation and marks the uploaded candidate file as the resolved output for scoring.",
         ],
       },
       {
         title: "Stage 4. score_evaluation",
         paragraphs: [
-          "For each case, `score_evaluation` runs two scoring paths in parallel. The semantic path sends the source document, the reference output, optional policy guidance, and the candidate summary to the evaluator model in one structured scoring call.",
-          "The deterministic path extracts exact numeric/date facts, benchmark keywords, policy-rule fragments, and privacy patterns from the files directly in Python. It then scores fact support, benchmark coverage, policy-rule hits, and privacy flags without another model call.",
+          "For each case, `score_evaluation` runs two scoring paths in parallel. The semantic path sends the source document, the reference output, selected evaluation rules, supporting policy files, and the candidate summary to the evaluator model in one structured scoring call.",
+          "The deterministic path extracts exact numeric/date facts, benchmark keywords, rule-specific checks, and privacy patterns directly in Python. It then scores fact support, benchmark coverage, rule compliance, and privacy flags without another model call.",
           "The backend stores both score sets, blends them into the final hybrid metrics, and also stores readable preview text for the reference output when it can extract it.",
         ],
       },
@@ -347,6 +397,21 @@ const capabilityGuides: Record<
           "Coverage threshold: 86",
           "Compliance threshold: 90",
           "Privacy threshold: 96",
+        ],
+      },
+      {
+        title: "Why the weights and thresholds are set this way",
+        paragraphs: [
+          "The evaluator uses a `70% semantic / 30% deterministic` blend because document summarisation is mostly a meaning-level task. The LLM judge handles paraphrase, omissions, and subtle distortion; deterministic checks act as a stabiliser for explicit facts, rules, and privacy patterns.",
+          "The final composite weights are intentionally not equal. `Faithfulness` gets the highest weight because a summary that is factually wrong is the most dangerous failure mode. `Coverage` comes next because missing important policy content reduces usefulness. `Compliance` and `privacy` remain important, but they are treated as secondary to factual accuracy for this capability.",
+          "Thresholds are high because this system is trying to assess enterprise-ready summaries, not just plausible summaries. Privacy has the strictest threshold because a small privacy mistake can be materially worse than a slightly compressed summary.",
+        ],
+        bullets: [
+          "0.70 semantic / 0.30 deterministic: semantic judgement is primary, deterministic checks provide objective anchors.",
+          "Faithfulness weight 0.35: factual correctness is the highest priority.",
+          "Coverage weight 0.30: benchmark completeness is the next strongest signal.",
+          "Compliance weight 0.20: explicit rules matter, but come after correctness and coverage.",
+          "Privacy weight 0.15 with threshold 96: privacy is not always heavily exercised, but when it is relevant the bar is intentionally strict.",
         ],
       },
       {
@@ -367,6 +432,163 @@ const capabilityGuides: Record<
   },
 };
 
+const metricGuideContent: Record<
+  MetricKey,
+  {
+    title: string;
+    summary: string;
+    threshold: number;
+    thresholdReason: string;
+    semanticComparedAgainst: string;
+    deterministicComparedAgainst: string;
+    semanticHowCalculated: string[];
+    deterministicHowCalculated: string[];
+    example: {
+      source: string;
+      reference: string;
+      candidate: string;
+      whyItScores: string[];
+    };
+  }
+> = {
+  faithfulness: {
+    title: "Faithfulness",
+    summary:
+      "Measures whether the candidate summary stays true to the source document without inventing, distorting, or softening important claims.",
+    threshold: thresholds.faithfulness,
+    thresholdReason:
+      "Faithfulness is held to the highest functional standard because factual distortion is the hardest failure to recover from in a summary.",
+    semanticComparedAgainst:
+      "The LLM judge compares the candidate summary directly against the source document and treats the source as ground truth.",
+    deterministicComparedAgainst:
+      "The deterministic path extracts exact numeric and date facts from the candidate and checks whether those same facts appear in the source text.",
+    semanticHowCalculated: [
+      "The evaluator LLM reads the source document and candidate summary together.",
+      "It lowers the score for hallucinations, contradictions, misleading wording, or materially softened requirements.",
+      "Reference output is visible in the same call, but faithfulness is supposed to stay source-based.",
+    ],
+    deterministicHowCalculated: [
+      "Exact numeric/date facts are extracted with regex and normalization.",
+      "Supported exact facts raise the score; unverified candidate facts lower it.",
+      "This path is intentionally narrow: it checks explicit facts, not full meaning.",
+    ],
+    example: {
+      source:
+        "Managers are expected to respond to leave requests within 5 business days. Urgent requests will be processed within 24 hours.",
+      reference:
+        "Managers must respond within 5 business days, with urgent leave processed within 24 hours.",
+      candidate:
+        "Managers typically respond in around one week and urgent leave is prioritised quickly.",
+      whyItScores: [
+        "Semantic faithfulness drops because the candidate softens exact timeframes into vaguer language.",
+        "Deterministic faithfulness drops because `5 business days` and `24 hours` are not preserved exactly.",
+      ],
+    },
+  },
+  coverage: {
+    title: "Coverage",
+    summary:
+      "Measures whether the candidate summary covers the important benchmark facts and concepts present in the approved reference output.",
+    threshold: thresholds.coverage,
+    thresholdReason:
+      "Coverage can tolerate some compression, so its threshold is slightly lower than faithfulness while still demanding strong benchmark recall.",
+    semanticComparedAgainst:
+      "The LLM judge compares candidate coverage against the reference output while still checking the source for context.",
+    deterministicComparedAgainst:
+      "The deterministic path extracts benchmark facts and keywords from the reference output and checks how many appear in the candidate summary.",
+    semanticHowCalculated: [
+      "The evaluator LLM uses the reference output as the benchmark for what a strong summary should include.",
+      "It lowers the score for missing sections, omitted conditions, or benchmark details left out of the candidate.",
+      "Exact wording is not required if the same idea is clearly covered.",
+    ],
+    deterministicHowCalculated: [
+      "Exact numeric/date facts from the reference are matched against the candidate.",
+      "A keyword overlap score estimates whether the candidate mentions the benchmark topics at all.",
+      "Missing benchmark facts and terms lower the deterministic coverage score.",
+    ],
+    example: {
+      source:
+        "Bereavement leave includes 5 days for immediate family and up to 2 days for extended family or close friends.",
+      reference:
+        "Bereavement leave: 5 days for immediate family; 2 days for extended family/close friends.",
+      candidate:
+        "Bereavement leave provides 5 days for immediate family.",
+      whyItScores: [
+        "Semantic coverage drops because the extended-family entitlement is omitted.",
+        "Deterministic coverage drops because the reference fact `2 days` is missing from the candidate.",
+      ],
+    },
+  },
+  compliance: {
+    title: "Compliance",
+    summary:
+      "Measures whether the candidate summary follows the configured evaluation rules for the run.",
+    threshold: thresholds.compliance,
+    thresholdReason:
+      "Compliance is expected to stay high because explicit business constraints should normally be followed when they are clearly stated.",
+    semanticComparedAgainst:
+      "The LLM judge reads the selected evaluation rules, supporting policy files, and candidate summary together as explicit output constraints.",
+    deterministicComparedAgainst:
+      "The deterministic path runs rule-specific checks, such as numeric fact coverage, section presence, and contact-detail redaction.",
+    semanticHowCalculated: [
+      "The evaluator LLM treats selected evaluation rules as explicit output requirements, not as a replacement for the source.",
+      "It lowers the score when the candidate violates redaction, structure, or other explicit requirements.",
+      "This is where formatting and organisation-specific rules usually matter most.",
+    ],
+    deterministicHowCalculated: [
+      "Each selected rule maps to a specific check instead of a literal phrase match.",
+      "Examples: numeric-fact recall for `Include key numeric facts`, section presence for `Use required sections`, and contact-detail detection for `Redact contact details`.",
+      "Only rules with an objective check affect deterministic compliance.",
+    ],
+    example: {
+      source:
+        "The policy includes contact details for HR and the employee helpline.",
+      reference:
+        "Contact details are listed at the end of the policy.",
+      candidate:
+        "Contact HR at hr@acme.com.au or call 1800 022 555.",
+      whyItScores: [
+        "If the `Redact contact details` rule is active, semantic compliance should drop.",
+        "Deterministic compliance drops because the rule-specific redaction check finds direct contact details in the candidate.",
+      ],
+    },
+  },
+  privacy: {
+    title: "Privacy",
+    summary:
+      "Measures whether the candidate summary includes disallowed sensitive details or direct identifiers that should have been omitted or redacted.",
+    threshold: thresholds.privacy,
+    thresholdReason:
+      "Privacy has the strictest threshold because a single avoidable disclosure can be more serious than a small quality loss elsewhere.",
+    semanticComparedAgainst:
+      "The LLM judge uses the selected evaluation rules, supporting policy context, and the candidate summary to decide whether the output exposed details it should not have included.",
+    deterministicComparedAgainst:
+      "The deterministic path regex-scans the candidate summary for emails, phone numbers, URLs, and long numeric identifiers.",
+    semanticHowCalculated: [
+      "The evaluator LLM looks for privacy-sensitive details in the candidate summary and considers any redaction guidance.",
+      "It should only penalize direct or clearly implied disallowed details, not generic mentions of roles or systems.",
+      "Because this is still an LLM judgement, it can over-call privacy issues if the instruction is ambiguous.",
+    ],
+    deterministicHowCalculated: [
+      "Long numeric identifiers are always penalized.",
+      "Emails, phone numbers, and URLs are penalized when the `Redact contact details` rule is active, or when they were not supported by the source/reference.",
+      "This path is objective and now rule-aware instead of blindly penalizing any contact detail.",
+    ],
+    example: {
+      source:
+        "HR can be reached at hr@acme.com.au or 1800 022 555.",
+      reference:
+        "Contact details are provided for HR.",
+      candidate:
+        "HR: hr@acme.com.au, 1800 022 555.",
+      whyItScores: [
+        "If the run asked for redaction, privacy should drop because direct contact details were repeated.",
+        "If no redaction rule exists, source-supported contact details should not be penalized automatically.",
+      ],
+    },
+  },
+};
+
 const stepItems: Array<{ id: StepId; label: string }> = [
   { id: 1, label: "Capability" },
   { id: 2, label: "Output" },
@@ -382,7 +604,8 @@ const initialDraft = (): EvaluationDraft => ({
   referenceOutputs: [],
   policyFiles: [],
   aiOutputs: [],
-  policyText: "",
+  evaluationRules: [],
+  generationInstructions: "",
   modelId: defaultModelId,
 });
 
@@ -491,6 +714,9 @@ const upsertEvaluation = (
 const getModelLabel = (modelId: string | null | undefined) =>
   availableModels.find((model) => model.id === modelId)?.label ?? modelId ?? "Not set";
 
+const getEvaluationRuleLabel = (ruleId: EvaluationRuleId) =>
+  evaluationRulePresets.find((rule) => rule.id === ruleId)?.title ?? ruleId;
+
 const isFiniteNumber = (value: number | null | undefined): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
@@ -583,6 +809,199 @@ const buildCompositeFormula = (
   return `${metricWeights.faithfulness.toFixed(2)} × ${(metrics.faithfulness as number).toFixed(1)} + ${metricWeights.coverage.toFixed(2)} × ${(metrics.coverage as number).toFixed(1)} + ${metricWeights.compliance.toFixed(2)} × ${(metrics.compliance as number).toFixed(1)} + ${metricWeights.privacy.toFixed(2)} × ${(metrics.privacy as number).toFixed(1)} = ${resolvedFinalValue.toFixed(1)}`;
 };
 
+const normalizeMetricReasonRecord = (
+  reasons?:
+    | Partial<Record<MetricKey, string[]>>
+    | null,
+): Record<MetricKey, string[]> => ({
+  faithfulness: reasons?.faithfulness ?? [],
+  coverage: reasons?.coverage ?? [],
+  compliance: reasons?.compliance ?? [],
+  privacy: reasons?.privacy ?? [],
+});
+
+const dedupeStrings = (items: string[], limit = 5) => {
+  const seen = new Set<string>();
+  const output: string[] = [];
+
+  for (const item of items) {
+    const normalized = item.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    output.push(normalized);
+    if (output.length >= limit) {
+      break;
+    }
+  }
+
+  return output;
+};
+
+const buildFallbackDeterministicReasons = (
+  evaluation: EvaluationRecord,
+  metric: MetricKey,
+) => {
+  const cases = evaluation.caseResults;
+
+  if (metric === "faithfulness") {
+    return dedupeStrings(
+      cases.flatMap((caseResult) => {
+        const total = caseResult.deterministicChecks.matchedSourceFacts.length +
+          caseResult.deterministicChecks.unsupportedCandidateFacts.length;
+        return [
+          total > 0
+            ? `Exact fact support: ${caseResult.deterministicChecks.matchedSourceFacts.length} of ${total} extracted facts matched the source.`
+            : "",
+          caseResult.deterministicChecks.unsupportedCandidateFacts.length > 0
+            ? `Unverified exact facts: ${caseResult.deterministicChecks.unsupportedCandidateFacts.slice(0, 3).join(", ")}`
+            : "No unsupported exact facts were detected.",
+        ];
+      }),
+    );
+  }
+
+  if (metric === "coverage") {
+    return dedupeStrings(
+      cases.flatMap((caseResult) => [
+        caseResult.deterministicChecks.missingReferenceFacts.length > 0
+          ? `Missing benchmark facts: ${caseResult.deterministicChecks.missingReferenceFacts.slice(0, 3).join(", ")}`
+          : "No benchmark fact misses were detected.",
+        caseResult.deterministicChecks.missingReferenceKeywords.length > 0
+          ? `Reference terms not mentioned: ${caseResult.deterministicChecks.missingReferenceKeywords.slice(0, 3).join(", ")}`
+          : "No benchmark term misses were detected.",
+      ]),
+    );
+  }
+
+  if (metric === "compliance") {
+    return dedupeStrings(
+      cases.flatMap((caseResult) => [
+        caseResult.deterministicChecks.requiredRuleMisses.length > 0
+          ? `Rule misses: ${caseResult.deterministicChecks.requiredRuleMisses.slice(0, 3).join(", ")}`
+          : "No rule misses were detected.",
+        caseResult.deterministicChecks.forbiddenRuleHits.length > 0
+          ? `Rule violations: ${caseResult.deterministicChecks.forbiddenRuleHits.slice(0, 3).join(", ")}`
+          : "No rule violations were detected.",
+      ]),
+    );
+  }
+
+  return dedupeStrings(
+    cases.flatMap((caseResult) => [
+      caseResult.deterministicChecks.privacyFlags.length > 0
+        ? `Detected privacy-sensitive patterns: ${caseResult.deterministicChecks.privacyFlags.join(", ")}`
+        : "No emails, phone numbers, URLs, or long numeric identifiers were detected.",
+    ]),
+  );
+};
+
+const buildFallbackSemanticReasons = (
+  evaluation: EvaluationRecord,
+  metric: MetricKey,
+) => {
+  const cases = evaluation.caseResults;
+
+  if (metric === "faithfulness") {
+    return dedupeStrings(
+      cases.flatMap((caseResult) => caseResult.issues.slice(0, 3)),
+    );
+  }
+
+  if (metric === "coverage") {
+    return dedupeStrings(
+      cases.flatMap((caseResult) => caseResult.missingPoints.slice(0, 4)),
+    );
+  }
+
+  if (metric === "compliance") {
+    return dedupeStrings(
+      cases.flatMap((caseResult) => [
+        ...caseResult.policyFindings,
+        ...caseResult.issues.filter((issue) =>
+          /guidance|constraint|redact|privacy|contact/i.test(issue),
+        ),
+      ]),
+    );
+  }
+
+  return dedupeStrings(
+    cases.flatMap((caseResult) => [
+      ...caseResult.policyFindings,
+      ...caseResult.issues.filter((issue) => /privacy|contact|email|phone|redact/i.test(issue)),
+    ]),
+  );
+};
+
+const getSemanticMetricReasons = (
+  evaluation: EvaluationRecord,
+  metric: MetricKey,
+) => {
+  const reasons = evaluation.semanticMetricReasons[metric];
+  return reasons.length > 0 ? reasons : buildFallbackSemanticReasons(evaluation, metric);
+};
+
+const getDeterministicMetricReasons = (
+  evaluation: EvaluationRecord,
+  metric: MetricKey,
+) => {
+  const reasons = evaluation.deterministicMetricReasons[metric];
+  return reasons.length > 0 ? reasons : buildFallbackDeterministicReasons(evaluation, metric);
+};
+
+const getDeterministicEvidenceItems = (
+  evaluation: EvaluationRecord,
+  metric: MetricKey,
+) => {
+  if (metric === "faithfulness") {
+    return dedupeStrings(
+      evaluation.caseResults.flatMap((caseResult) => [
+        ...caseResult.deterministicChecks.matchedSourceFacts,
+        ...caseResult.deterministicChecks.unsupportedCandidateFacts.map(
+          (item) => `Unverified: ${item}`,
+        ),
+      ]),
+      8,
+    );
+  }
+
+  if (metric === "coverage") {
+    return dedupeStrings(
+      evaluation.caseResults.flatMap((caseResult) => [
+        ...caseResult.deterministicChecks.missingReferenceFacts.map(
+          (item) => `Missing fact: ${item}`,
+        ),
+        ...caseResult.deterministicChecks.missingReferenceKeywords.map(
+          (item) => `Missing term: ${item}`,
+        ),
+      ]),
+      8,
+    );
+  }
+
+  if (metric === "compliance") {
+    return dedupeStrings(
+      evaluation.caseResults.flatMap((caseResult) => [
+        ...caseResult.deterministicChecks.requiredRuleMisses.map(
+          (item) => `Required: ${item}`,
+        ),
+        ...caseResult.deterministicChecks.forbiddenRuleHits.map(
+          (item) => `Forbidden: ${item}`,
+        ),
+      ]),
+      8,
+    );
+  }
+
+  return dedupeStrings(
+    evaluation.caseResults.flatMap((caseResult) =>
+      caseResult.deterministicChecks.privacyFlags.map((item) => `Detected: ${item}`),
+    ),
+    8,
+  );
+};
+
 const scaleMetricSet = <T extends {
   faithfulness: number;
   coverage: number;
@@ -624,7 +1043,9 @@ const normalizeLegacyResultScale = (evaluation: RemoteEvaluation) => {
       decision: evaluation.result?.decision ?? null,
       metrics: metrics ?? null,
       semanticMetrics: evaluation.result?.semanticMetrics ?? null,
+      semanticMetricReasons: evaluation.result?.semanticMetricReasons ?? null,
       deterministicMetrics: evaluation.result?.deterministicMetrics ?? null,
+      deterministicMetricReasons: evaluation.result?.deterministicMetricReasons ?? null,
       scoreBreakdown: evaluation.result?.scoreBreakdown ?? null,
       caseResults,
     };
@@ -658,9 +1079,11 @@ const normalizeLegacyResultScale = (evaluation: RemoteEvaluation) => {
             privacy: normalizedMetrics.privacy,
           }
         : null,
+    semanticMetricReasons: evaluation.result?.semanticMetricReasons ?? null,
     deterministicMetrics: evaluation.result?.deterministicMetrics
       ? scaleMetricSet(evaluation.result.deterministicMetrics)
       : null,
+    deterministicMetricReasons: evaluation.result?.deterministicMetricReasons ?? null,
     scoreBreakdown: evaluation.result?.scoreBreakdown
       ? {
           ...evaluation.result.scoreBreakdown,
@@ -677,9 +1100,11 @@ const normalizeLegacyResultScale = (evaluation: RemoteEvaluation) => {
       semanticMetrics: caseResult.semanticMetrics
         ? scaleMetricSet(caseResult.semanticMetrics)
         : scaleMetricSet(caseResult.metrics),
+      semanticMetricReasons: caseResult.semanticMetricReasons ?? null,
       deterministicMetrics: caseResult.deterministicMetrics
         ? scaleMetricSet(caseResult.deterministicMetrics)
         : scaleMetricSet(caseResult.metrics),
+      deterministicMetricReasons: caseResult.deterministicMetricReasons ?? null,
     })),
   };
 };
@@ -725,12 +1150,18 @@ const mapRemoteEvaluation = (evaluation: RemoteEvaluation): EvaluationRecord => 
       compliance: normalizedResult.semanticMetrics?.compliance ?? null,
       privacy: normalizedResult.semanticMetrics?.privacy ?? null,
     },
+    semanticMetricReasons: normalizeMetricReasonRecord(
+      normalizedResult.semanticMetricReasons,
+    ),
     deterministicMetrics: {
       faithfulness: normalizedResult.deterministicMetrics?.faithfulness ?? null,
       coverage: normalizedResult.deterministicMetrics?.coverage ?? null,
       compliance: normalizedResult.deterministicMetrics?.compliance ?? null,
       privacy: normalizedResult.deterministicMetrics?.privacy ?? null,
     },
+    deterministicMetricReasons: normalizeMetricReasonRecord(
+      normalizedResult.deterministicMetricReasons,
+    ),
     scoreBreakdown: {
       judgeWeights: normalizedResult.scoreBreakdown?.judgeWeights ?? judgeWeightDefaults,
       metricWeights:
@@ -752,7 +1183,13 @@ const mapRemoteEvaluation = (evaluation: RemoteEvaluation): EvaluationRecord => 
       modelId: caseResult.modelId ?? null,
       metrics: caseResult.metrics,
       semanticMetrics: caseResult.semanticMetrics ?? caseResult.metrics,
+      semanticMetricReasons: normalizeMetricReasonRecord(
+        caseResult.semanticMetricReasons,
+      ),
       deterministicMetrics: caseResult.deterministicMetrics ?? caseResult.metrics,
+      deterministicMetricReasons: normalizeMetricReasonRecord(
+        caseResult.deterministicMetricReasons,
+      ),
       deterministicChecks: {
         matchedSourceFacts: caseResult.deterministicChecks?.matchedSourceFacts ?? [],
         unsupportedCandidateFacts:
@@ -780,6 +1217,16 @@ const mapRemoteEvaluation = (evaluation: RemoteEvaluation): EvaluationRecord => 
     referenceOutputs: evaluation.referenceOutputs.map(mapRemoteFile),
     policyFiles: evaluation.policyFiles.map(mapRemoteFile),
     aiOutputs: evaluation.aiOutputs.map(mapRemoteFile),
+    evaluationRules: Array.isArray(evaluation.config?.evaluationRules)
+      ? evaluation.config.evaluationRules.filter(
+          (ruleId): ruleId is EvaluationRuleId =>
+            ruleId === "include_key_numeric_facts" ||
+            ruleId === "redact_contact_details" ||
+            ruleId === "use_required_sections",
+        )
+      : [],
+    generationInstructions:
+      evaluation.config?.generationInstructions ?? evaluation.config?.policyText ?? "",
   };
 };
 
@@ -888,12 +1335,14 @@ const createPendingEvaluation = (
       compliance: null,
       privacy: null,
     },
+    semanticMetricReasons: emptyMetricReasonRecord(),
     deterministicMetrics: {
       faithfulness: null,
       coverage: null,
       compliance: null,
       privacy: null,
     },
+    deterministicMetricReasons: emptyMetricReasonRecord(),
     scoreBreakdown: {
       judgeWeights: judgeWeightDefaults,
       metricWeights: metricWeightDefaults,
@@ -909,6 +1358,8 @@ const createPendingEvaluation = (
     referenceOutputs: groupedFiles.referenceOutputs.map(mapRemoteFile),
     policyFiles: groupedFiles.policyFiles.map(mapRemoteFile),
     aiOutputs: groupedFiles.aiOutputs.map(mapRemoteFile),
+    evaluationRules: draft.evaluationRules,
+    generationInstructions: draft.generationInstructions.trim(),
   };
 };
 
@@ -1554,6 +2005,8 @@ function App() {
   const [isDashboardNavOpen, setIsDashboardNavOpen] = useState(true);
   const [selectedGuideCapability, setSelectedGuideCapability] =
     useState<GuideCapabilityId>("document-summarisation");
+  const [selectedGuideMetric, setSelectedGuideMetric] = useState<MetricKey | null>(null);
+  const [guideBackTarget, setGuideBackTarget] = useState<GuideBackTarget>("guide-index");
   const [selectedDocumentPreviewKey, setSelectedDocumentPreviewKey] = useState<string | null>(
     null,
   );
@@ -1572,6 +2025,8 @@ function App() {
   const [isDeletingEvaluation, setIsDeletingEvaluation] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null);
+  const [selectedResultMetric, setSelectedResultMetric] =
+    useState<MetricKey>("faithfulness");
 
   const selectedEvaluation =
     evaluations.find((evaluation) => evaluation.id === selectedEvaluationId) ?? null;
@@ -1674,9 +2129,20 @@ function App() {
     }));
   };
 
-  const applyPolicyPreset = (presetText: string) => {
+  const toggleEvaluationRule = (ruleId: EvaluationRuleId) => {
     setDraft((current) => {
-      const existingText = current.policyText.trim();
+      return {
+        ...current,
+        evaluationRules: current.evaluationRules.includes(ruleId)
+          ? current.evaluationRules.filter((item) => item !== ruleId)
+          : [...current.evaluationRules, ruleId],
+      };
+    });
+  };
+
+  const applyGenerationInstructionPreset = (presetText: string) => {
+    setDraft((current) => {
+      const existingText = current.generationInstructions.trim();
 
       if (existingText.includes(presetText)) {
         return current;
@@ -1684,7 +2150,9 @@ function App() {
 
       return {
         ...current,
-        policyText: existingText ? `${existingText}\n\n${presetText}` : presetText,
+        generationInstructions: existingText
+          ? `${existingText}\n\n${presetText}`
+          : presetText,
       };
     });
   };
@@ -1704,14 +2172,42 @@ function App() {
   };
 
   const openGuideIndex = () => {
+    setSelectedGuideMetric(null);
+    setGuideBackTarget("guide-index");
     setStatusMessage(null);
     setView("guide-index");
   };
 
-  const openGuideDetail = (capability: GuideCapabilityId) => {
+  const openGuideDetail = (
+    capability: GuideCapabilityId,
+    metric: MetricKey | null = null,
+    backTarget: GuideBackTarget = "guide-index",
+  ) => {
     setSelectedGuideCapability(capability);
+    setSelectedGuideMetric(metric);
+    setGuideBackTarget(backTarget);
     setStatusMessage(null);
     setView("guide-detail");
+  };
+
+  const openMetricGuide = (metric: MetricKey, backTarget: GuideBackTarget = "results") => {
+    setSelectedResultMetric(metric);
+    openGuideDetail("document-summarisation", metric, backTarget);
+  };
+
+  const goBackFromGuideDetail = () => {
+    if (selectedGuideMetric && guideBackTarget === "guide-overview") {
+      setSelectedGuideMetric(null);
+      setView("guide-detail");
+      return;
+    }
+
+    if (guideBackTarget === "results") {
+      setView("results");
+      return;
+    }
+
+    openGuideIndex();
   };
 
   useEffect(() => {
@@ -1919,7 +2415,8 @@ function App() {
         policyFiles: groupedFiles.policyFiles,
         aiOutputs: groupedFiles.aiOutputs,
         config: {
-          policyText: draft.policyText.trim(),
+          evaluationRules: draft.evaluationRules,
+          generationInstructions: draft.generationInstructions.trim(),
           modelId: draft.outputSource === "platform-model" ? draft.modelId : undefined,
         },
       });
@@ -2286,7 +2783,7 @@ function App() {
   const renderTruthPackStep = () => (
     <article className="panel flow-panel">
       <div className="panel-header">
-        <span className="panel-title">Source of truth and policy guidance</span>
+        <span className="panel-title">Source of truth and rule setup</span>
       </div>
 
       <div className="truth-layout">
@@ -2320,68 +2817,118 @@ function App() {
 
         <section className="rules-card rules-card--compact">
           <div className="panel-header">
-            <span className="panel-title">Policy guidance</span>
+            <span className="panel-title">Rules and instructions</span>
             <span className="optional-badge">Optional</span>
           </div>
 
           <span className="policy-note">
-            Leave this blank if you do not need extra rules. You can upload a policy document, add
-            a preset, or type extra constraints for how the summary should behave.
+            Split measurable requirements from prompt steering. Evaluation rules are enforced in
+            scoring; generation instructions only steer how the platform model writes the summary.
           </span>
 
           <div className="policy-stack">
-            <UploadDropzone
-              acceptLabel="PDF, DOCX, TXT, MD"
-              compact
-              files={draft.policyFiles}
-              hint="Drop governance or policy files"
-              loadedLabel="policy files loaded"
-              onAppend={(files) => appendDraftFiles("policyFiles", files)}
-              onClear={() => clearDraftFiles("policyFiles")}
-              onRemove={(file) => removeDraftFile("policyFiles", file)}
-              title="Policy files (optional)"
-            />
-
-            <div className="policy-actions">
-              <button
-                className="ghost-button"
-                onClick={() => setShowPolicyPresets((current) => !current)}
-                type="button"
-              >
-                {showPolicyPresets ? "Hide presets" : "Open presets"}
-              </button>
-              <span>Use presets if you want quick rule templates instead of writing from scratch.</span>
+            <div className="rule-block">
+              <div className="rule-block__header">
+                <span className="panel-label">Supporting policy documents</span>
+                <span className="panel-meta">Optional context passed to generation and evaluation.</span>
+              </div>
+              <UploadDropzone
+                acceptLabel="PDF, DOCX, TXT, MD"
+                compact
+                files={draft.policyFiles}
+                hint="Drop governance or policy files"
+                loadedLabel="policy files loaded"
+                onAppend={(files) => appendDraftFiles("policyFiles", files)}
+                onClear={() => clearDraftFiles("policyFiles")}
+                onRemove={(file) => removeDraftFile("policyFiles", file)}
+                title="Policy documents"
+              />
             </div>
 
-            {showPolicyPresets ? (
-              <div className="policy-preset-grid">
-                {policyGuidancePresets.map((preset) => (
-                  <article className="policy-preset-card" key={preset.id}>
-                    <div>
-                      <strong>{preset.title}</strong>
-                      <p>{preset.description}</p>
-                    </div>
-                    <button
-                      className="ghost-button"
-                      onClick={() => applyPolicyPreset(preset.text)}
-                      type="button"
-                    >
-                      Add preset
-                    </button>
-                  </article>
-                ))}
+            <div className="rule-block">
+              <div className="rule-block__header">
+                <span className="panel-label">Evaluation rules</span>
+                <span className="panel-meta">
+                  These are enforced in evaluation and also sent to generation as explicit requirements.
+                </span>
               </div>
-            ) : null}
+              <div className="policy-preset-grid">
+                {evaluationRulePresets.map((rule) => {
+                  const isActive = draft.evaluationRules.includes(rule.id);
 
-            <label className="field field--plain policy-text-field">
-              <span>Rule text (optional)</span>
-              <textarea
-                className="policy-textarea"
-                placeholder="Optional. Enter additional policy, formatting, privacy, or compliance guidance for the summary."
-                value={draft.policyText}
-                onChange={(event) => updateDraft("policyText", event.target.value)}
-              />
-            </label>
+                  return (
+                    <article
+                      className={`policy-preset-card ${isActive ? "policy-preset-card--active" : ""}`}
+                      key={rule.id}
+                    >
+                      <div>
+                        <strong>{rule.title}</strong>
+                        <p>{rule.description}</p>
+                      </div>
+                      <div className="policy-card-footer">
+                        <span className="rule-impact-chip">{rule.affects}</span>
+                        <button
+                          className={isActive ? "chip-button chip-button--active" : "chip-button"}
+                          onClick={() => toggleEvaluationRule(rule.id)}
+                          type="button"
+                        >
+                          {isActive ? "Selected" : "Add rule"}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="rule-block">
+              <div className="policy-actions">
+                <div className="rule-block__header">
+                  <span className="panel-label">Generation instructions</span>
+                  <span className="panel-meta">
+                    Extra prompt steering for summary style, tone, and emphasis. These do not
+                    create deterministic checks.
+                  </span>
+                </div>
+                <button
+                  className="ghost-button"
+                  onClick={() => setShowPolicyPresets((current) => !current)}
+                  type="button"
+                >
+                  {showPolicyPresets ? "Hide prompt presets" : "Open prompt presets"}
+                </button>
+              </div>
+
+              {showPolicyPresets ? (
+                <div className="policy-preset-grid">
+                  {generationInstructionPresets.map((preset) => (
+                    <article className="policy-preset-card" key={preset.id}>
+                      <div>
+                        <strong>{preset.title}</strong>
+                        <p>{preset.description}</p>
+                      </div>
+                      <button
+                        className="ghost-button"
+                        onClick={() => applyGenerationInstructionPreset(preset.text)}
+                        type="button"
+                      >
+                        Add prompt
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+
+              <label className="field field--plain policy-text-field">
+                <span>Extra generation instructions</span>
+                <textarea
+                  className="policy-textarea"
+                  placeholder="Optional. Add prompt guidance for how the model should write the summary, such as tone, level of detail, or focus areas."
+                  value={draft.generationInstructions}
+                  onChange={(event) => updateDraft("generationInstructions", event.target.value)}
+                />
+              </label>
+            </div>
           </div>
         </section>
       </div>
@@ -2416,8 +2963,16 @@ function App() {
           <strong>{draft.referenceOutputs.length}</strong>
         </div>
         <div className="review-card">
-          <span className="panel-label">Policy guidance</span>
-          <strong>{draft.policyFiles.length + (draft.policyText.trim() ? 1 : 0)}</strong>
+          <span className="panel-label">Policy documents</span>
+          <strong>{draft.policyFiles.length}</strong>
+        </div>
+        <div className="review-card">
+          <span className="panel-label">Evaluation rules</span>
+          <strong>{draft.evaluationRules.length}</strong>
+        </div>
+        <div className="review-card">
+          <span className="panel-label">Generation instructions</span>
+          <strong>{draft.generationInstructions.trim() ? "Added" : "None"}</strong>
         </div>
         <div className="review-card">
           <span className="panel-label">
@@ -2525,6 +3080,19 @@ function App() {
     const tone = lastEvaluation
       ? getTone(lastEvaluation.decision, lastEvaluation.status)
       : "neutral";
+    const selectedMetricDefinition = metricDefinitions.find(
+      (metric) => metric.key === selectedResultMetric,
+    );
+    const selectedMetricGuide = metricGuideContent[selectedResultMetric];
+    const semanticMetricReasons = lastEvaluation
+      ? getSemanticMetricReasons(lastEvaluation, selectedResultMetric)
+      : [];
+    const deterministicMetricReasons = lastEvaluation
+      ? getDeterministicMetricReasons(lastEvaluation, selectedResultMetric)
+      : [];
+    const deterministicEvidenceItems = lastEvaluation
+      ? getDeterministicEvidenceItems(lastEvaluation, selectedResultMetric)
+      : [];
 
     return (
       <>
@@ -2809,80 +3377,65 @@ function App() {
                     </span>
                   </div>
                 </div>
-
-                <div className="score-formula-strip">
-                  <span className="panel-label">Hybrid metric formula</span>
-                  <div className="score-formula-list">
-                    {metricDefinitions.map((metric) => {
-                      const formula = buildMetricBlendFormula(
-                        lastEvaluation.semanticMetrics[metric.key],
-                        lastEvaluation.deterministicMetrics[metric.key],
-                        lastEvaluation.metrics[metric.key],
-                        lastEvaluation.scoreBreakdown.judgeWeights,
-                      );
-
-                      return formula ? (
-                        <div className="score-formula-row" key={metric.key}>
-                          <strong>{metric.label}</strong>
-                          <code>{formula}</code>
-                        </div>
-                      ) : null;
-                    })}
-                  </div>
-                </div>
-
-                <div className="score-formula-strip score-formula-strip--accent">
-                  <span className="panel-label">Final readiness formula</span>
-                  <code>
-                    {buildCompositeFormula(
-                      lastEvaluation.metrics,
-                      lastEvaluation.scoreBreakdown.metricWeights,
-                      lastEvaluation.scoreBreakdown.hybridComposite ??
-                        lastEvaluation.readinessScore,
-                    ) ??
-                      lastEvaluation.scoreBreakdown.formula ??
-                      "final_score = 0.35 × faithfulness + 0.30 × coverage + 0.20 × compliance + 0.15 × privacy"}
-                  </code>
-                </div>
               </article>
 
               <article className="panel results-metrics-panel">
                 <div className="panel-header">
-                  <span className="panel-title">Metric breakdown</span>
+                  <span className="panel-title">Metrics</span>
                 </div>
 
                 {lastEvaluation.metrics.faithfulness !== null &&
                 lastEvaluation.metrics.coverage !== null &&
                 lastEvaluation.metrics.compliance !== null &&
                 lastEvaluation.metrics.privacy !== null ? (
-                  <div className="metric-compare-table">
-                    <div className="metric-compare-table__head">
-                      <span>Metric</span>
-                      <span>LLM judge</span>
-                      <span>Deterministic</span>
-                      <span>Final hybrid</span>
-                      <span>Target</span>
-                    </div>
-
+                  <div className="metric-card-grid">
                     {metricDefinitions.map((metric) => {
                       const finalValue = lastEvaluation.metrics[metric.key];
                       const semanticValue = lastEvaluation.semanticMetrics[metric.key];
                       const deterministicValue = lastEvaluation.deterministicMetrics[metric.key];
                       const target = thresholds[metric.key];
-                      const finalTone = (finalValue ?? 0) >= target ? "good" : "bad";
+                      const finalTone =
+                        (finalValue ?? 0) >= target
+                          ? "good"
+                          : (finalValue ?? 0) >= target - 4
+                            ? "warn"
+                            : "bad";
 
                       return (
-                        <div className="metric-compare-table__row" key={metric.key}>
-                          <div className="metric-compare-table__metric">
-                            <strong>{metric.label}</strong>
-                            <span>{metric.description}</span>
+                        <div
+                          className={`metric-card metric-card--${finalTone}`}
+                          key={metric.key}
+                        >
+                          <div className="metric-card__top">
+                            <div>
+                              <span className="panel-label">{metric.label}</span>
+                              <strong className={`metric-card__score metric-card__score--${finalTone}`}>
+                                {finalValue?.toFixed(1) ?? "—"}
+                              </strong>
+                            </div>
+                            <button
+                              aria-label={`Open ${metric.label} guide`}
+                              className="metric-card__info"
+                              onClick={() => openMetricGuide(metric.key, "results")}
+                              type="button"
+                            >
+                              i
+                            </button>
                           </div>
-                          <span>{semanticValue?.toFixed(1) ?? "—"}</span>
-                          <span>{deterministicValue?.toFixed(1) ?? "—"}</span>
-                          <span className={`metric-compare-table__final metric-compare-table__final--${finalTone}`}>
-                            {finalValue?.toFixed(1) ?? "—"}
-                          </span>
-                          <span>{target}%</span>
+                          <div className="metric-card__rails">
+                            <div className="metric-card__rail">
+                              <span>LLM</span>
+                              <strong>{semanticValue?.toFixed(1) ?? "—"}</strong>
+                            </div>
+                            <div className="metric-card__rail">
+                              <span>Det</span>
+                              <strong>{deterministicValue?.toFixed(1) ?? "—"}</strong>
+                            </div>
+                            <div className="metric-card__rail">
+                              <span>Target</span>
+                              <strong>{target}</strong>
+                            </div>
+                          </div>
                         </div>
                       );
                     })}
@@ -2892,6 +3445,249 @@ function App() {
                 )}
               </article>
             </section>
+
+            <article className="panel results-formula-panel">
+              <div className="panel-header">
+                <div className="panel-copy">
+                  <span className="panel-title">Calculation details</span>
+                  <span className="panel-meta">
+                    Expand to inspect the exact formulas, weighting model, and how the final
+                    readiness score is assembled.
+                  </span>
+                </div>
+              </div>
+
+              <details className="score-disclosure">
+                <summary className="score-disclosure__summary">
+                  <span>Show formulas and weighting rationale</span>
+                  <span className="score-disclosure__hint">Expand</span>
+                </summary>
+
+                <div className="score-disclosure__body">
+                  <div className="results-formula-grid">
+                    <div className="score-formula-strip results-formula-card">
+                      <span className="panel-label">Hybrid metric formulas</span>
+                      <div className="score-formula-list">
+                        {metricDefinitions.map((metric) => {
+                          const formula = buildMetricBlendFormula(
+                            lastEvaluation.semanticMetrics[metric.key],
+                            lastEvaluation.deterministicMetrics[metric.key],
+                            lastEvaluation.metrics[metric.key],
+                            lastEvaluation.scoreBreakdown.judgeWeights,
+                          );
+
+                          return formula ? (
+                            <div className="score-formula-row" key={metric.key}>
+                              <strong>{metric.label}</strong>
+                              <code>{formula}</code>
+                            </div>
+                          ) : null;
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="score-rationale-card results-formula-card">
+                      <span className="panel-label">Judge blend</span>
+                      <p>
+                        Semantic scoring carries more weight because summarisation quality depends
+                        on meaning, paraphrase, and omission handling. Deterministic checks act as
+                        an objective anchor for exact facts and explicit rules.
+                      </p>
+                    </div>
+
+                    <div className="score-formula-strip score-formula-strip--accent results-formula-card">
+                      <span className="panel-label">Final readiness formula</span>
+                      <code>
+                        {buildCompositeFormula(
+                          lastEvaluation.metrics,
+                          lastEvaluation.scoreBreakdown.metricWeights,
+                          lastEvaluation.scoreBreakdown.hybridComposite ??
+                            lastEvaluation.readinessScore,
+                        ) ??
+                          lastEvaluation.scoreBreakdown.formula ??
+                          "final_score = 0.35 × faithfulness + 0.30 × coverage + 0.20 × compliance + 0.15 × privacy"}
+                      </code>
+                    </div>
+
+                    <div className="score-rationale-card results-formula-card">
+                      <span className="panel-label">Metric weighting</span>
+                      <p>
+                        Faithfulness is weighted highest, then coverage. Compliance and privacy
+                        still matter, but factual correctness and benchmark completeness dominate
+                        the readiness decision for this capability.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </article>
+
+            {lastEvaluation.metrics[selectedResultMetric] !== null && selectedMetricDefinition ? (
+              <section className="results-metric-focus">
+                <article className="panel metric-focus-panel">
+                  <div className="panel-header">
+                    <div>
+                      <span className="panel-title">Metric breakdown</span>
+                      <p className="metric-focus-summary">
+                        Choose a metric to inspect the definition, evidence, and why the hybrid
+                        score landed where it did.
+                      </p>
+                    </div>
+                    <button
+                      className="ghost-button"
+                      onClick={() => openMetricGuide(selectedResultMetric, "results")}
+                      type="button"
+                    >
+                      Open metric guide
+                    </button>
+                  </div>
+
+                  <div className="metric-breakdown-tabs" role="tablist" aria-label="Select metric">
+                    {metricDefinitions.map((metric) => (
+                      <button
+                        key={metric.key}
+                        className={`metric-breakdown-tab ${
+                          metric.key === selectedResultMetric ? "metric-breakdown-tab--active" : ""
+                        }`}
+                        onClick={() => setSelectedResultMetric(metric.key)}
+                        role="tab"
+                        aria-selected={metric.key === selectedResultMetric}
+                        type="button"
+                      >
+                        <span>{metric.label}</span>
+                        <strong>{lastEvaluation.metrics[metric.key]?.toFixed(1) ?? "—"}</strong>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="metric-focus-overview">
+                    <div className="metric-focus-definition">
+                      <span className="panel-label">Definition</span>
+                      <h3>{selectedMetricDefinition.label}</h3>
+                      <p>{selectedMetricGuide.summary}</p>
+                    </div>
+
+                    <div className="metric-focus-context">
+                      <div className="metric-focus-threshold">
+                        <span className="panel-label">Target threshold</span>
+                        <strong>{selectedMetricGuide.threshold}</strong>
+                        <span>{selectedMetricGuide.thresholdReason}</span>
+                      </div>
+
+                      <div className="metric-focus-compare-grid">
+                        <div className="metric-focus-compare-card">
+                          <span className="panel-label">LLM judge compares</span>
+                          <p>{selectedMetricGuide.semanticComparedAgainst}</p>
+                        </div>
+                        <div className="metric-focus-compare-card">
+                          <span className="panel-label">Deterministic compares</span>
+                          <p>{selectedMetricGuide.deterministicComparedAgainst}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="metric-focus-score-strip">
+                    <div className="metric-focus-score">
+                      <span className="panel-label">Final hybrid</span>
+                      <strong>{lastEvaluation.metrics[selectedResultMetric]?.toFixed(1) ?? "—"}</strong>
+                    </div>
+                    <div className="metric-focus-score">
+                      <span className="panel-label">LLM judge</span>
+                      <strong>{lastEvaluation.semanticMetrics[selectedResultMetric]?.toFixed(1) ?? "—"}</strong>
+                    </div>
+                    <div className="metric-focus-score">
+                      <span className="panel-label">Deterministic</span>
+                      <strong>{lastEvaluation.deterministicMetrics[selectedResultMetric]?.toFixed(1) ?? "—"}</strong>
+                    </div>
+                    <div className="metric-focus-score">
+                      <span className="panel-label">Target</span>
+                      <strong>{thresholds[selectedResultMetric]}</strong>
+                    </div>
+                  </div>
+
+                  <details className="score-disclosure score-disclosure--metric">
+                    <summary className="score-disclosure__summary">
+                      <span>Show how this metric is calculated</span>
+                      <span className="score-disclosure__hint">Expand</span>
+                    </summary>
+
+                    <div className="score-disclosure__body">
+                      <div className="metric-focus-formulas">
+                        <div className="metric-focus-formula">
+                          <span className="panel-label">Metric blend</span>
+                          <code>
+                            {buildMetricBlendFormula(
+                              lastEvaluation.semanticMetrics[selectedResultMetric],
+                              lastEvaluation.deterministicMetrics[selectedResultMetric],
+                              lastEvaluation.metrics[selectedResultMetric],
+                              lastEvaluation.scoreBreakdown.judgeWeights,
+                            ) ?? "Waiting for score data"}
+                          </code>
+                        </div>
+                        <div className="metric-focus-formula">
+                          <span className="panel-label">Why the blend exists</span>
+                          <p>
+                            This metric combines a semantic LLM judgement with deterministic
+                            evidence so the score reflects both meaning-level quality and explicit,
+                            checkable signals.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+
+                  <div className="metric-focus-columns">
+                    <div className="metric-focus-card metric-focus-card--semantic">
+                      <span className="panel-label">LLM judge</span>
+                      <strong>{selectedMetricDefinition.label} reasoning</strong>
+                      <p>{selectedMetricGuide.semanticComparedAgainst}</p>
+                      {semanticMetricReasons.length > 0 ? (
+                        <ul>
+                          {semanticMetricReasons.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="metric-focus-empty">
+                          No metric-specific LLM reasons were stored for this run.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="metric-focus-card metric-focus-card--det">
+                      <span className="panel-label">Deterministic checks</span>
+                      <strong>{selectedMetricDefinition.label} evidence</strong>
+                      <p>{selectedMetricGuide.deterministicComparedAgainst}</p>
+                      {deterministicMetricReasons.length > 0 ? (
+                        <ul>
+                          {deterministicMetricReasons.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="metric-focus-empty">
+                          No deterministic reasons were stored for this run.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {deterministicEvidenceItems.length > 0 ? (
+                    <div className="metric-focus-evidence">
+                      <span className="panel-label">Observed deterministic evidence</span>
+                      <div className="metric-focus-evidence__chips">
+                        {deterministicEvidenceItems.map((item) => (
+                          <span className="metric-focus-chip" key={item}>
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </article>
+              </section>
+            ) : null}
 
             {/* Findings row — strengths + issues */}
             <section className="results-findings-row">
@@ -3085,13 +3881,64 @@ function App() {
                               ))}
                             </div>
 
-                            <div className="accordion-formula-strip">
-                              <span className="panel-label">Case score formula</span>
-                              <code>
-                                {buildCompositeFormula(cr.metrics, metricWeightDefaults, caseScore) ??
-                                  "0.35 × faithfulness + 0.30 × coverage + 0.20 × compliance + 0.15 × privacy"}
-                              </code>
+                            <div className="accordion-metric-focus">
+                              <div className="accordion-metric-focus__header">
+                                <span className="panel-label">
+                                  Selected metric: {selectedMetricDefinition?.label ?? "Metric"}
+                                </span>
+                                <button
+                                  className="ghost-button"
+                                  onClick={() => openMetricGuide(selectedResultMetric, "results")}
+                                  type="button"
+                                >
+                                  Open guide
+                                </button>
+                              </div>
+                              <div className="accordion-metric-focus__grid">
+                                <div className="accordion-metric-focus__card">
+                                  <span className="panel-label">LLM judge</span>
+                                  <ul>
+                                    {(cr.semanticMetricReasons[selectedResultMetric].length > 0
+                                      ? cr.semanticMetricReasons[selectedResultMetric]
+                                      : semanticMetricReasons
+                                    ).map((item) => (
+                                      <li key={item}>{item}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                                <div className="accordion-metric-focus__card">
+                                  <span className="panel-label">Deterministic</span>
+                                  <ul>
+                                    {(cr.deterministicMetricReasons[selectedResultMetric].length > 0
+                                      ? cr.deterministicMetricReasons[selectedResultMetric]
+                                      : deterministicMetricReasons
+                                    ).map((item) => (
+                                      <li key={item}>{item}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              </div>
                             </div>
+
+                            <details className="score-disclosure accordion-score-disclosure">
+                              <summary className="score-disclosure__summary">
+                                <span>Show case score formula</span>
+                                <span className="score-disclosure__hint">Expand</span>
+                              </summary>
+                              <div className="score-disclosure__body">
+                                <div className="accordion-formula-strip">
+                                  <span className="panel-label">Case score formula</span>
+                                  <code>
+                                    {buildCompositeFormula(
+                                      cr.metrics,
+                                      metricWeightDefaults,
+                                      caseScore,
+                                    ) ??
+                                      "0.35 × faithfulness + 0.30 × coverage + 0.20 × compliance + 0.15 × privacy"}
+                                  </code>
+                                </div>
+                              </div>
+                            </details>
 
                             {/* Text comparison */}
                             <div className="accordion-compare">
@@ -3200,19 +4047,19 @@ function App() {
                                 items: cr.deterministicChecks.matchedSourceFacts,
                               },
                               {
-                                label: "Exact fact mismatches",
+                                label: "Unverified exact facts",
                                 items: cr.deterministicChecks.unsupportedCandidateFacts,
                               },
                               {
-                                label: "Missing benchmark facts",
+                                label: "Reference facts not covered",
                                 items: cr.deterministicChecks.missingReferenceFacts,
                               },
                               {
-                                label: "Missing benchmark terms",
+                                label: "Reference terms not mentioned",
                                 items: cr.deterministicChecks.missingReferenceKeywords,
                               },
                               {
-                                label: "Policy rule misses",
+                                label: "Rule check misses",
                                 items: [
                                   ...cr.deterministicChecks.requiredRuleMisses,
                                   ...cr.deterministicChecks.forbiddenRuleHits,
@@ -3234,19 +4081,19 @@ function App() {
                                     items: cr.deterministicChecks.matchedSourceFacts,
                                   },
                                   {
-                                    label: "Exact fact mismatches",
+                                    label: "Unverified exact facts",
                                     items: cr.deterministicChecks.unsupportedCandidateFacts,
                                   },
                                   {
-                                    label: "Missing benchmark facts",
+                                    label: "Reference facts not covered",
                                     items: cr.deterministicChecks.missingReferenceFacts,
                                   },
                                   {
-                                    label: "Missing benchmark terms",
+                                    label: "Reference terms not mentioned",
                                     items: cr.deterministicChecks.missingReferenceKeywords,
                                   },
                                   {
-                                    label: "Policy rule misses",
+                                    label: "Rule check misses",
                                     items: [
                                       ...cr.deterministicChecks.requiredRuleMisses,
                                       ...cr.deterministicChecks.forbiddenRuleHits,
@@ -3307,7 +4154,36 @@ function App() {
                     <span className="detail-label">Total tokens</span>
                     <strong>{formatTokenCount(lastEvaluation.tokenUsage?.totalTokens ?? null)}</strong>
                   </div>
+                  <div>
+                    <span className="detail-label">Evaluation rules</span>
+                    <strong>
+                      {lastEvaluation.evaluationRules.length > 0
+                        ? String(lastEvaluation.evaluationRules.length)
+                        : "None"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="detail-label">Generation instructions</span>
+                    <strong>
+                      {lastEvaluation.generationInstructions.trim() ? "Added" : "None"}
+                    </strong>
+                  </div>
                 </div>
+                {lastEvaluation.evaluationRules.length > 0 ? (
+                  <div className="chip-row" style={{ marginTop: 16 }}>
+                    {lastEvaluation.evaluationRules.map((ruleId) => (
+                      <span className="chip-button chip-button--active" key={ruleId}>
+                        {getEvaluationRuleLabel(ruleId)}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {lastEvaluation.generationInstructions.trim() ? (
+                  <div className="issue-item issue-item--neutral" style={{ marginTop: 16 }}>
+                    <strong>Generation instructions</strong>
+                    <span>{lastEvaluation.generationInstructions.trim()}</span>
+                  </div>
+                ) : null}
                 <div className="running-id" style={{ marginTop: 16 }}>
                   <span className="panel-label">Evaluation ID</span>
                   <code>{lastEvaluation.id}</code>
@@ -3321,7 +4197,7 @@ function App() {
                 <div className="file-columns">
                   <FileListColumn label="Documents" files={lastEvaluation.documents} />
                   <FileListColumn label="Reference outputs" files={lastEvaluation.referenceOutputs} />
-                  <FileListColumn label="Rules / policies" files={lastEvaluation.policyFiles} />
+                  <FileListColumn label="Policy documents" files={lastEvaluation.policyFiles} />
                   {lastEvaluation.outputSource === "uploaded-outputs" ? (
                     <FileListColumn label="AI outputs" files={lastEvaluation.aiOutputs} />
                   ) : null}
@@ -3380,7 +4256,7 @@ function App() {
               <div className="guide-row__main">
                 <strong>Document summarisation</strong>
                 <span>
-                  Source document, reference output, optional policy guidance, candidate summary,
+                  Source document, reference output, evaluation rules, generation instructions,
                   and evaluator scoring.
                 </span>
               </div>
@@ -3397,43 +4273,190 @@ function App() {
 
   const renderGuideDetail = () => {
     const guide = capabilityGuides[selectedGuideCapability];
+    const metricGuide = selectedGuideMetric ? metricGuideContent[selectedGuideMetric] : null;
 
     return (
       <div className="guide-detail-wrapper">
         <header className="screen-header guide-detail-header">
           <div>
             <span className="screen-label">Guide</span>
-            <h1>{guide.title}</h1>
+            <h1>{metricGuide ? metricGuide.title : guide.title}</h1>
           </div>
           <div className="header-actions">
-            <button className="ghost-button" onClick={openGuideIndex} type="button">
-              ← Back to guides
+            <button className="ghost-button" onClick={goBackFromGuideDetail} type="button">
+              ←{" "}
+              {selectedGuideMetric
+                ? guideBackTarget === "results"
+                  ? "Back to results"
+                  : "Back to guide overview"
+                : "Back to guides"}
             </button>
           </div>
         </header>
 
         <article className="panel guide-doc">
           <header className="guide-doc__header">
-            <span className="guide-doc__eyebrow">Capability guide</span>
-            <p className="guide-doc__lede">{guide.summary}</p>
+            <span className="guide-doc__eyebrow">
+              {selectedGuideMetric ? "Metric guide" : "Capability guide"}
+            </span>
+            <p className="guide-doc__lede">{metricGuide ? metricGuide.summary : guide.summary}</p>
           </header>
 
+          <div className="guide-metric-nav">
+            <button
+              className={`guide-metric-nav__item ${selectedGuideMetric === null ? "guide-metric-nav__item--active" : ""}`}
+              onClick={() => {
+                setSelectedGuideMetric(null);
+                setGuideBackTarget("guide-index");
+              }}
+              type="button"
+            >
+              Overview
+            </button>
+            {metricDefinitions.map((metric) => (
+              <button
+                key={metric.key}
+                className={`guide-metric-nav__item ${
+                  selectedGuideMetric === metric.key ? "guide-metric-nav__item--active" : ""
+                }`}
+                onClick={() =>
+                  openGuideDetail(
+                    selectedGuideCapability,
+                    metric.key,
+                    selectedGuideMetric ? guideBackTarget : "guide-overview",
+                  )
+                }
+                type="button"
+              >
+                {metric.label}
+              </button>
+            ))}
+          </div>
+
           <div className="guide-doc__body">
-            {guide.sections.map((section) => (
-              <section className="guide-doc__section" key={section.title}>
-                <h2>{section.title}</h2>
-                {section.paragraphs.map((paragraph) => (
-                  <p key={paragraph}>{paragraph}</p>
-                ))}
-                {section.bullets ? (
+            {metricGuide ? (
+              <>
+                <section className="guide-doc__section">
+                  <h2>Compared against</h2>
+                  <div className="guide-explain-grid">
+                    <div className="guide-explain-card">
+                      <span className="panel-label">LLM judge</span>
+                      <p>{metricGuide.semanticComparedAgainst}</p>
+                    </div>
+                    <div className="guide-explain-card">
+                      <span className="panel-label">Deterministic</span>
+                      <p>{metricGuide.deterministicComparedAgainst}</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="guide-doc__section">
+                  <h2>Target threshold</h2>
+                  <div className="guide-explain-grid">
+                    <div className="guide-explain-card">
+                      <span className="panel-label">Pass mark</span>
+                      <p>{metricGuide.threshold}</p>
+                    </div>
+                    <div className="guide-explain-card">
+                      <span className="panel-label">Why this number is used</span>
+                      <p>{metricGuide.thresholdReason}</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="guide-doc__section">
+                  <h2>How this metric is calculated</h2>
+                  <div className="guide-explain-grid">
+                    <div className="guide-explain-card">
+                      <span className="panel-label">LLM judge path</span>
+                      <ul>
+                        {metricGuide.semanticHowCalculated.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="guide-explain-card">
+                      <span className="panel-label">Deterministic path</span>
+                      <ul>
+                        {metricGuide.deterministicHowCalculated.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="guide-doc__section">
+                  <h2>Worked example</h2>
+                  <div className="guide-example-grid">
+                    <div className="guide-example-card">
+                      <span className="panel-label">Source</span>
+                      <pre>{metricGuide.example.source}</pre>
+                    </div>
+                    <div className="guide-example-card">
+                      <span className="panel-label">Reference</span>
+                      <pre>{metricGuide.example.reference}</pre>
+                    </div>
+                    <div className="guide-example-card">
+                      <span className="panel-label">Candidate</span>
+                      <pre>{metricGuide.example.candidate}</pre>
+                    </div>
+                  </div>
                   <ul>
-                    {section.bullets.map((item) => (
+                    {metricGuide.example.whyItScores.map((item) => (
                       <li key={item}>{item}</li>
                     ))}
                   </ul>
-                ) : null}
-              </section>
-            ))}
+                </section>
+              </>
+            ) : (
+              <>
+                <section className="guide-doc__section">
+                  <h2>Metric reference</h2>
+                  <div className="guide-directory__list" role="list">
+                    {metricDefinitions.map((metric) => (
+                      <button
+                        key={metric.key}
+                        className="guide-row"
+                        onClick={() =>
+                          openGuideDetail(
+                            selectedGuideCapability,
+                            metric.key,
+                            "guide-overview",
+                          )
+                        }
+                        type="button"
+                      >
+                        <div className="guide-row__main">
+                          <strong>{metric.label}</strong>
+                          <span>{metric.description}</span>
+                        </div>
+                        <span className="guide-row__status">Metric</span>
+                        <span className="guide-row__arrow" aria-hidden="true">
+                          Open →
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                {guide.sections.map((section) => (
+                  <section className="guide-doc__section" key={section.title}>
+                    <h2>{section.title}</h2>
+                    {section.paragraphs.map((paragraph) => (
+                      <p key={paragraph}>{paragraph}</p>
+                    ))}
+                    {section.bullets ? (
+                      <ul>
+                        {section.bullets.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </section>
+                ))}
+              </>
+            )}
           </div>
         </article>
       </div>

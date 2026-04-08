@@ -104,6 +104,48 @@ MONTH_PATTERN = (
     r"november|december"
 )
 
+EVALUATION_RULES = {
+    "include_key_numeric_facts": {
+        "label": "Include key numeric facts",
+        "evaluation_instruction": (
+            "The summary should preserve the material numeric facts, entitlements, limits, "
+            "and response times from the source/reference."
+        ),
+        "type": "numeric_coverage",
+    },
+    "redact_contact_details": {
+        "label": "Redact contact details",
+        "evaluation_instruction": (
+            "The summary must not include direct contact details such as email addresses, "
+            "phone numbers, URLs, or similar contact endpoints."
+        ),
+        "type": "redact_contact_details",
+    },
+    "use_required_sections": {
+        "label": "Use required sections",
+        "evaluation_instruction": (
+            "The summary should include clear sections for Key points, Notice requirements, "
+            "Approval process, and Escalation."
+        ),
+        "type": "required_sections",
+        "sections": [
+            {"label": "Key points", "keywords": ["key points", "key takeaways"]},
+            {"label": "Notice requirements", "keywords": ["notice requirements", "notice"]},
+            {"label": "Approval process", "keywords": ["approval process", "approvals"]},
+            {"label": "Escalation", "keywords": ["escalation", "escalate"]},
+        ],
+    },
+}
+
+SENSITIVE_PATTERNS = {
+    "email address": r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b",
+    "phone number": r"(?:\+?\d[\d ()-]{7,}\d)",
+    "url": r"\b(?:https?://|www\.)\S+\b",
+    "long numeric identifier": r"\b\d{7,}\b",
+}
+
+CONTACT_DETAIL_LABELS = {"email address", "phone number", "url"}
+
 CASE_EVALUATION_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -116,6 +158,33 @@ CASE_EVALUATION_SCHEMA = {
                 "coverage": {"type": "integer", "minimum": 0, "maximum": 100},
                 "compliance": {"type": "integer", "minimum": 0, "maximum": 100},
                 "privacy": {"type": "integer", "minimum": 0, "maximum": 100},
+            },
+            "required": ["faithfulness", "coverage", "compliance", "privacy"],
+        },
+        "metricReasons": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "faithfulness": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 3,
+                },
+                "coverage": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 3,
+                },
+                "compliance": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 3,
+                },
+                "privacy": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 3,
+                },
             },
             "required": ["faithfulness", "coverage", "compliance", "privacy"],
         },
@@ -142,6 +211,7 @@ CASE_EVALUATION_SCHEMA = {
     },
     "required": [
         "scores",
+        "metricReasons",
         "strengths",
         "missingPoints",
         "issues",
@@ -159,11 +229,14 @@ CASE_EVALUATION_FORMAT = {
 CASE_EVALUATION_INSTRUCTIONS = """You grade enterprise document summaries.
 
 Scoring rules:
+- Score exactly four metrics: faithfulness, coverage, compliance, and privacy.
+- For each metric, return 1 to 3 short reason bullets in metricReasons explaining why that score was assigned.
 - Use the source document as the ground truth for faithfulness.
 - Use the reference output to understand what a strong summary should cover, but do not require exact wording.
-- Use any supplied policy files or typed policy guidance as extra compliance constraints.
+- Use any supplied policy files and structured evaluation rules as extra compliance/privacy constraints.
 - The candidate summary may be provided as plain text or as an attached file. If it is a file, read it first and evaluate the readable summary text it contains.
 - Be strict about hallucinations, contradictions, and misleading omissions.
+- Do not infer privacy violations unless the candidate summary actually contains or clearly implies disallowed details. Mentions of roles, teams, or systems without a direct email, phone number, URL, identifier, or equivalent contact detail should not by themselves count as privacy violations.
 - Return integer scores on a 0 to 100 scale, where 100 is best. Do not use a 1 to 10 scale.
 - Keep findings short and concrete.
 
@@ -267,6 +340,35 @@ def get_policy_guidance_text(test_case, policy_text):
     return "\n\n".join(parts).strip()
 
 
+def get_selected_evaluation_rules(config):
+    raw_rules = config.get("evaluationRules", [])
+
+    if not isinstance(raw_rules, list):
+        return []
+
+    seen = set()
+    ordered = []
+
+    for item in raw_rules:
+        rule_id = str(item).strip()
+        if not rule_id or rule_id in seen or rule_id not in EVALUATION_RULES:
+            continue
+        seen.add(rule_id)
+        ordered.append(rule_id)
+
+    return ordered
+
+
+def build_evaluation_rule_guidance(rule_ids):
+    if not rule_ids:
+        return None
+
+    return "Structured evaluation rules:\n" + "\n".join(
+        f"- {EVALUATION_RULES[rule_id]['evaluation_instruction']}"
+        for rule_id in rule_ids
+    )
+
+
 def tokenize_text(text):
     return re.findall(r"[a-z][a-z0-9']+", text.lower())
 
@@ -356,62 +458,71 @@ def extract_numeric_facts(text):
     return facts
 
 
-def extract_policy_rules(policy_guidance_text):
-    lowered = policy_guidance_text.lower()
-    forbidden = []
-    required = []
+def normalize_sensitive_value(label, value):
+    cleaned = value.strip().rstrip(".,;:")
 
-    forbidden_patterns = [
-        r"(?:do not|don't|avoid|exclude|never)\s+([^.\n;]+)",
-    ]
-    required_patterns = [
-        r"(?:must include|include|with sections for)\s+([^.\n;]+)",
-    ]
+    if label == "email address":
+        return cleaned.lower()
+    if label == "phone number":
+        return re.sub(r"\D", "", cleaned)
+    if label == "url":
+        normalized = cleaned.lower()
+        normalized = re.sub(r"^https?://", "", normalized)
+        normalized = re.sub(r"^www\.", "", normalized)
+        return normalized.rstrip("/")
+    if label == "long numeric identifier":
+        return re.sub(r"\D", "", cleaned)
 
-    def normalize_rule_fragment(fragment):
-        fragment = re.sub(r"[^a-z0-9\s/-]", " ", fragment.lower())
-        tokens = [
-            token
-            for token in fragment.split()
-            if len(token) >= 3 and token not in STOPWORDS
-        ]
-        return " ".join(tokens[:5]).strip()
-
-    for pattern in forbidden_patterns:
-        for match in re.finditer(pattern, lowered):
-            phrase = normalize_rule_fragment(match.group(1))
-            if phrase:
-                forbidden.append(phrase)
-
-    for pattern in required_patterns:
-        for match in re.finditer(pattern, lowered):
-            phrase = normalize_rule_fragment(match.group(1))
-            if phrase:
-                required.append(phrase)
-
-    return {
-        "forbidden": dedupe_ordered(forbidden, 8),
-        "required": dedupe_ordered(required, 8),
-    }
+    return cleaned.lower()
 
 
-def detect_privacy_flags(text):
-    flags = []
-    patterns = {
-        "email address": r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b",
-        "phone number": r"(?:\+?\d[\d ()-]{7,}\d)",
-        "url": r"\b(?:https?://|www\.)\S+\b",
-        "long numeric identifier": r"\b\d{7,}\b",
-    }
+def extract_sensitive_items(text):
+    items = []
+    seen = set()
 
-    for label, pattern in patterns.items():
-        if re.search(pattern, text, re.IGNORECASE):
-            flags.append(label)
+    for label, pattern in SENSITIVE_PATTERNS.items():
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            display = match.group(0).strip().rstrip(".,;:")
+            normalized_value = normalize_sensitive_value(label, display)
+            if not normalized_value:
+                continue
 
-    return flags
+            key = f"{label}|{normalized_value}"
+            if key in seen:
+                continue
+
+            seen.add(key)
+            items.append(
+                {
+                    "label": label,
+                    "display": display,
+                    "key": key,
+                }
+            )
+
+    return items
 
 
-def build_deterministic_case_assessment(source_text, reference_text, candidate_text, policy_guidance_text):
+def find_section_matches(candidate_text, rule_definition):
+    lowered_candidate = candidate_text.lower()
+    matched = []
+    missing = []
+
+    for section in rule_definition.get("sections", []):
+        if any(keyword in lowered_candidate for keyword in section["keywords"]):
+            matched.append(section["label"])
+        else:
+            missing.append(section["label"])
+
+    return matched, missing
+
+
+def build_deterministic_case_assessment(
+    source_text,
+    reference_text,
+    candidate_text,
+    evaluation_rule_ids,
+):
     source_facts = extract_numeric_facts(source_text)
     reference_facts = extract_numeric_facts(reference_text)
     candidate_facts = extract_numeric_facts(candidate_text)
@@ -435,18 +546,83 @@ def build_deterministic_case_assessment(source_text, reference_text, candidate_t
     matched_reference_keywords = sorted(reference_keywords & candidate_keywords)
     missing_reference_keywords = sorted(reference_keywords - candidate_keywords)
 
-    policy_rules = extract_policy_rules(policy_guidance_text) if policy_guidance_text else {
-        "required": [],
-        "forbidden": [],
+    source_sensitive_items = extract_sensitive_items(source_text)
+    reference_sensitive_items = extract_sensitive_items(reference_text)
+    candidate_sensitive_items = extract_sensitive_items(candidate_text)
+
+    allowed_sensitive_keys = {
+        item["key"] for item in source_sensitive_items + reference_sensitive_items
     }
-    lowered_candidate = candidate_text.lower()
-    required_rule_misses = [
-        phrase for phrase in policy_rules["required"] if phrase and phrase not in lowered_candidate
-    ]
-    forbidden_rule_hits = [
-        phrase for phrase in policy_rules["forbidden"] if phrase and phrase in lowered_candidate
-    ]
-    privacy_flags = detect_privacy_flags(candidate_text)
+    redact_contact_details = "redact_contact_details" in evaluation_rule_ids
+
+    privacy_violations = []
+    for item in candidate_sensitive_items:
+        if item["label"] == "long numeric identifier":
+            privacy_violations.append(item)
+            continue
+
+        if item["label"] in CONTACT_DETAIL_LABELS:
+            if redact_contact_details or item["key"] not in allowed_sensitive_keys:
+                privacy_violations.append(item)
+
+    privacy_flags = dedupe_ordered(
+        [f"{item['label']}: {item['display']}" for item in privacy_violations],
+        8,
+    )
+
+    rule_passes = []
+    required_rule_misses = []
+    forbidden_rule_hits = []
+
+    if "include_key_numeric_facts" in evaluation_rule_ids:
+        required_numeric_facts = reference_facts or source_facts
+        missing_numeric_rule_facts = [
+            fact["display"]
+            for fact in required_numeric_facts
+            if fact["key"] not in candidate_fact_keys
+        ]
+        matched_numeric_rule_facts = [
+            fact["display"]
+            for fact in required_numeric_facts
+            if fact["key"] in candidate_fact_keys
+        ]
+
+        if missing_numeric_rule_facts:
+            required_rule_misses.append(
+                "Include key numeric facts: "
+                + ", ".join(dedupe_ordered(missing_numeric_rule_facts, 4))
+            )
+        else:
+            rule_passes.append(
+                "Include key numeric facts"
+                + (
+                    f" ({len(dedupe_ordered(matched_numeric_rule_facts, 12))} matched)"
+                    if matched_numeric_rule_facts
+                    else ""
+                )
+            )
+
+    if "use_required_sections" in evaluation_rule_ids:
+        matched_sections, missing_sections = find_section_matches(
+            candidate_text, EVALUATION_RULES["use_required_sections"]
+        )
+        if missing_sections:
+            required_rule_misses.append(
+                "Use required sections: " + ", ".join(missing_sections)
+            )
+        else:
+            rule_passes.append(
+                "Use required sections"
+                + (f" ({', '.join(matched_sections)})" if matched_sections else "")
+            )
+
+    if redact_contact_details:
+        if privacy_flags:
+            forbidden_rule_hits.extend(
+                [f"Redact contact details: {flag}" for flag in privacy_flags]
+            )
+        else:
+            rule_passes.append("Redact contact details")
 
     if candidate_fact_keys:
         fact_precision = len(matched_source_facts) / max(1, len(candidate_fact_keys))
@@ -466,10 +642,27 @@ def build_deterministic_case_assessment(source_text, reference_text, candidate_t
     )
     coverage_score = (fact_recall * 0.55 + keyword_recall * 0.45) * 100
 
-    if policy_rules["required"] or policy_rules["forbidden"]:
-        compliance_score = 100 - (18 * len(required_rule_misses)) - (22 * len(forbidden_rule_hits))
-    else:
-        compliance_score = 100
+    compliance_score = 100.0
+
+    if "include_key_numeric_facts" in evaluation_rule_ids:
+        required_numeric_facts = reference_facts or source_facts
+        if required_numeric_facts:
+            matched_required_numeric = len(
+                {fact["key"] for fact in required_numeric_facts} & candidate_fact_keys
+            )
+            numeric_recall = matched_required_numeric / max(1, len({fact["key"] for fact in required_numeric_facts}))
+            compliance_score -= (1 - numeric_recall) * 26
+
+    if "use_required_sections" in evaluation_rule_ids:
+        total_sections = len(EVALUATION_RULES["use_required_sections"]["sections"])
+        matched_sections, _missing_sections = find_section_matches(
+            candidate_text, EVALUATION_RULES["use_required_sections"]
+        )
+        section_recall = len(matched_sections) / max(1, total_sections)
+        compliance_score -= (1 - section_recall) * 22
+
+    if redact_contact_details and privacy_flags:
+        compliance_score -= min(36, 18 * len(privacy_flags))
 
     privacy_score = 100 - (24 * len(privacy_flags))
 
@@ -480,17 +673,106 @@ def build_deterministic_case_assessment(source_text, reference_text, candidate_t
         "privacy": clamp_score(privacy_score),
     }
 
+    metric_reasons = {
+        "faithfulness": dedupe_ordered(
+            [
+                (
+                    f"Exact fact support: {len(matched_source_facts)} of "
+                    f"{len(candidate_fact_keys)} extracted candidate facts matched the source."
+                    if candidate_fact_keys
+                    else "No numeric/date fact claims were extracted from the candidate summary."
+                ),
+                (
+                    "Unverified exact facts: "
+                    + ", ".join(dedupe_ordered(unsupported_candidate_facts, 3))
+                    if unsupported_candidate_facts
+                    else "No unsupported numeric/date facts were detected."
+                ),
+            ],
+            3,
+        ),
+        "coverage": dedupe_ordered(
+            [
+                (
+                    f"Reference fact recall: {len(reference_fact_keys & candidate_fact_keys)} "
+                    f"of {len(reference_fact_keys)} extracted benchmark facts matched."
+                    if reference_fact_keys
+                    else "No exact benchmark facts were extracted from the reference output."
+                ),
+                (
+                    f"Reference term recall: {len(matched_reference_keywords)} of "
+                    f"{len(reference_keywords)} benchmark terms matched."
+                    if reference_keywords
+                    else "No benchmark keywords were extracted from the reference output."
+                ),
+                (
+                    "Missing benchmark facts: "
+                    + ", ".join(dedupe_ordered(missing_reference_facts, 3))
+                    if missing_reference_facts
+                    else "No benchmark fact misses were detected."
+                ),
+            ],
+            3,
+        ),
+        "compliance": dedupe_ordered(
+            [
+                (
+                    f"Configured rule passes: {len(rule_passes)}; rule misses: "
+                    f"{len(required_rule_misses)}; rule violations: {len(forbidden_rule_hits)}."
+                    if evaluation_rule_ids
+                    else "No structured evaluation rules were configured for deterministic compliance."
+                ),
+                (
+                    "Rule misses: "
+                    + "; ".join(dedupe_ordered(required_rule_misses, 3))
+                    if required_rule_misses
+                    else (
+                        "Rule passes: " + "; ".join(dedupe_ordered(rule_passes, 3))
+                        if rule_passes
+                        else "No rule misses were detected."
+                    )
+                ),
+                (
+                    "Rule violations: "
+                    + "; ".join(dedupe_ordered(forbidden_rule_hits, 3))
+                    if forbidden_rule_hits
+                    else "No rule violations were detected."
+                ),
+            ],
+            3,
+        ),
+        "privacy": dedupe_ordered(
+            [
+                (
+                    "Detected privacy-sensitive patterns: "
+                    + ", ".join(dedupe_ordered(privacy_flags, 4))
+                    if privacy_flags
+                    else (
+                        "No disallowed emails, phone numbers, URLs, or long numeric identifiers were detected."
+                    )
+                ),
+                (
+                    "Direct contact details are only penalized when a redaction rule is active "
+                    "or the detail was not supported by the source/reference."
+                ),
+            ],
+            3,
+        ),
+    }
+
     return {
         "metrics": metrics,
+        "metricReasons": metric_reasons,
         "checks": {
             "matchedSourceFacts": dedupe_ordered(matched_source_facts, 8),
             "unsupportedCandidateFacts": dedupe_ordered(unsupported_candidate_facts, 8),
             "missingReferenceFacts": dedupe_ordered(missing_reference_facts, 8),
             "matchedReferenceKeywords": matched_reference_keywords[:10],
             "missingReferenceKeywords": missing_reference_keywords[:10],
+            "rulePasses": dedupe_ordered(rule_passes, 8),
             "requiredRuleMisses": dedupe_ordered(required_rule_misses, 8),
             "forbiddenRuleHits": dedupe_ordered(forbidden_rule_hits, 8),
-            "privacyFlags": dedupe_ordered(privacy_flags, 8),
+            "privacyFlags": privacy_flags,
         },
     }
 
@@ -511,7 +793,14 @@ def merge_usage(total_usage, usage):
     total_usage["total_tokens"] += int(usage.get("total_tokens", 0))
 
 
-def score_case_with_retries(event, evaluator_model, test_case, resolved_output, policy_text):
+def score_case_with_retries(
+    event,
+    evaluator_model,
+    test_case,
+    resolved_output,
+    evaluation_rule_ids,
+    legacy_policy_text,
+):
     attempts = [1200, 2200, 3600]
     total_latency_seconds = 0.0
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -521,7 +810,12 @@ def score_case_with_retries(event, evaluator_model, test_case, resolved_output, 
         response_payload, latency_seconds = create_response(
             model=evaluator_model,
             instructions=CASE_EVALUATION_INSTRUCTIONS,
-            input_content=build_case_content(test_case, resolved_output, policy_text),
+            input_content=build_case_content(
+                test_case,
+                resolved_output,
+                evaluation_rule_ids,
+                legacy_policy_text,
+            ),
             response_format=CASE_EVALUATION_FORMAT,
             max_output_tokens=max_output_tokens,
             reasoning_effort="medium",
@@ -551,13 +845,18 @@ def score_case_with_retries(event, evaluator_model, test_case, resolved_output, 
     )
 
 
-def build_case_content(test_case, resolved_output, policy_text):
+def build_case_content(
+    test_case,
+    resolved_output,
+    evaluation_rule_ids,
+    legacy_policy_text,
+):
     content = [
         {
             "type": "input_text",
             "text": (
                 "Evaluate the candidate summary against the source document, the approved "
-                "reference output, and any optional policy guidance."
+                "reference output, and any configured rules or supporting policy context."
             ),
         },
         {
@@ -577,13 +876,17 @@ def build_case_content(test_case, resolved_output, policy_text):
         for reference_output in test_case["referenceOutputs"]:
             content.append(to_input_file_item(reference_output))
 
-    if test_case.get("policyFiles") or policy_text:
+    rule_guidance = build_evaluation_rule_guidance(evaluation_rule_ids)
+    typed_legacy_guidance = legacy_policy_text.strip() if legacy_policy_text else ""
+
+    if test_case.get("policyFiles") or rule_guidance or typed_legacy_guidance:
         content.append(
             {
                 "type": "input_text",
                 "text": (
-                    "Optional policy guidance follows. Use it only as additional constraints "
-                    "for compliance/privacy; it does not replace the source document."
+                    "Optional organisational constraints follow. Use uploaded policy files as "
+                    "supporting context and apply any structured evaluation rules as "
+                    "compliance/privacy constraints; they do not replace the source document."
                 ),
             }
         )
@@ -591,11 +894,19 @@ def build_case_content(test_case, resolved_output, policy_text):
     for policy_file in test_case.get("policyFiles", []):
         content.append(to_input_file_item(policy_file))
 
-    if policy_text:
+    if rule_guidance:
         content.append(
             {
                 "type": "input_text",
-                "text": f"Typed policy guidance:\n{policy_text}",
+                "text": rule_guidance,
+            }
+        )
+
+    if typed_legacy_guidance and not evaluation_rule_ids:
+        content.append(
+            {
+                "type": "input_text",
+                "text": f"Legacy typed guidance:\n{typed_legacy_guidance}",
             }
         )
 
@@ -642,6 +953,18 @@ def top_case_findings(case_results):
     return ordered_issues[:5], ordered_strengths[:5]
 
 
+def aggregate_metric_reason_sets(case_results, field_name):
+    aggregated = {}
+
+    for metric_name in METRIC_WEIGHTS:
+        reasons = []
+        for case_result in case_results:
+            reasons.extend(case_result.get(field_name, {}).get(metric_name, []))
+        aggregated[metric_name] = dedupe_ordered(reasons, 5)
+
+    return aggregated
+
+
 def build_decision(metrics):
     readiness_score = weighted_metric_score(metrics)
 
@@ -669,7 +992,8 @@ def handler(event, _context):
     )
 
     config = event.get("config", {})
-    policy_text = str(config.get("policyText", "")).strip()
+    evaluation_rule_ids = get_selected_evaluation_rules(config)
+    legacy_policy_text = str(config.get("policyText", "")).strip()
     evaluator_model = config.get("evaluatorModel") or DEFAULT_EVALUATOR_MODEL
     resolved_outputs = {
         output["caseId"]: output for output in event.get("resolvedOutputs", [])
@@ -692,21 +1016,20 @@ def handler(event, _context):
         source_text = get_source_text(test_case)
         reference_text = get_reference_text(test_case) or ""
         candidate_summary_text = get_candidate_summary_text(test_case, resolved_output)
-        policy_guidance_text = get_policy_guidance_text(test_case, policy_text)
-
         evaluation, case_latency_seconds, case_usage = score_case_with_retries(
             event,
             evaluator_model,
             test_case,
             resolved_output,
-            policy_text,
+            evaluation_rule_ids,
+            legacy_policy_text,
         )
         semantic_metrics = normalize_case_scores(evaluation["scores"])
         deterministic_assessment = build_deterministic_case_assessment(
             source_text,
             reference_text,
             candidate_summary_text,
-            policy_guidance_text,
+            evaluation_rule_ids,
         )
         deterministic_metrics = deterministic_assessment["metrics"]
         hybrid_metrics = blend_metric_sets(semantic_metrics, deterministic_metrics)
@@ -738,7 +1061,14 @@ def handler(event, _context):
                 "modelId": resolved_output.get("modelId"),
                 "metrics": hybrid_metrics,
                 "semanticMetrics": semantic_metrics,
+                "semanticMetricReasons": {
+                    metric_name: dedupe_ordered(
+                        evaluation["metricReasons"].get(metric_name, []), 3
+                    )
+                    for metric_name in METRIC_WEIGHTS
+                },
                 "deterministicMetrics": deterministic_metrics,
+                "deterministicMetricReasons": deterministic_assessment["metricReasons"],
                 "deterministicChecks": deterministic_assessment["checks"],
                 "strengths": dedupe_ordered(evaluation["strengths"], 3),
                 "missingPoints": dedupe_ordered(evaluation["missingPoints"], 5),
@@ -797,6 +1127,12 @@ def handler(event, _context):
     decision, readiness_score = build_decision(metrics)
     semantic_composite = weighted_metric_score(semantic_metrics)
     deterministic_composite = weighted_metric_score(deterministic_metrics)
+    semantic_metric_reasons = aggregate_metric_reason_sets(
+        case_results, "semanticMetricReasons"
+    )
+    deterministic_metric_reasons = aggregate_metric_reason_sets(
+        case_results, "deterministicMetricReasons"
+    )
     issues, strengths = top_case_findings(case_results)
 
     if metrics["faithfulness"] < THRESHOLDS["faithfulness"]:
@@ -826,7 +1162,9 @@ def handler(event, _context):
         "readinessScore": readiness_score,
         "metrics": metrics,
         "semanticMetrics": semantic_metrics,
+        "semanticMetricReasons": semantic_metric_reasons,
         "deterministicMetrics": deterministic_metrics,
+        "deterministicMetricReasons": deterministic_metric_reasons,
         "scoreBreakdown": {
             "judgeWeights": JUDGE_WEIGHTS,
             "metricWeights": METRIC_WEIGHTS,
