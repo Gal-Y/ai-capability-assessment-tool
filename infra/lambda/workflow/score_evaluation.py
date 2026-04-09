@@ -1,4 +1,5 @@
 from collections import Counter
+from difflib import SequenceMatcher
 import re
 
 from common import (
@@ -371,6 +372,45 @@ def build_evaluation_rule_guidance(rule_ids):
 
 def tokenize_text(text):
     return re.findall(r"[a-z][a-z0-9']+", text.lower())
+
+
+def normalize_text_for_similarity(text):
+    return " ".join(tokenize_text(text))
+
+
+def get_coverage_guardrail(reference_text, candidate_text):
+    normalized_reference = normalize_text_for_similarity(reference_text)
+    normalized_candidate = normalize_text_for_similarity(candidate_text)
+
+    if not normalized_reference or not normalized_candidate:
+        return None
+
+    if normalized_reference == normalized_candidate:
+        return {
+            "score_floor": 100,
+            "reason": (
+                "Coverage guardrail applied: the candidate summary matches the approved "
+                "reference output after normalization."
+            ),
+        }
+
+    similarity_ratio = SequenceMatcher(
+        None, normalized_reference, normalized_candidate
+    ).ratio()
+    length_ratio = min(len(normalized_reference), len(normalized_candidate)) / max(
+        len(normalized_reference), len(normalized_candidate)
+    )
+
+    if similarity_ratio >= 0.985 and length_ratio >= 0.97:
+        return {
+            "score_floor": 98,
+            "reason": (
+                "Coverage guardrail applied: the candidate summary is nearly identical to "
+                "the approved reference output."
+            ),
+        }
+
+    return None
 
 
 def extract_keyword_set(text, limit=18):
@@ -1025,6 +1065,19 @@ def handler(event, _context):
             legacy_policy_text,
         )
         semantic_metrics = normalize_case_scores(evaluation["scores"])
+        coverage_guardrail = get_coverage_guardrail(
+            reference_text,
+            candidate_summary_text,
+        )
+        if (
+            coverage_guardrail
+            and semantic_metrics["coverage"] < coverage_guardrail["score_floor"]
+        ):
+            semantic_metrics["coverage"] = coverage_guardrail["score_floor"]
+            evaluation["metricReasons"]["coverage"] = dedupe_ordered(
+                [coverage_guardrail["reason"], *evaluation["metricReasons"]["coverage"]],
+                3,
+            )
         deterministic_assessment = build_deterministic_case_assessment(
             source_text,
             reference_text,
