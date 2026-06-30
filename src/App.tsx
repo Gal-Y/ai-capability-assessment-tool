@@ -33,7 +33,7 @@ import {
 
 type OutputSource = "platform-model" | "uploaded-outputs";
 type Decision = "Ready" | "Conditional" | "Not Ready";
-type ViewId = "overview" | "data" | "results" | "create" | "settings";
+type ViewId = "overview" | "data" | "results" | "create" | "settings" | "documentation";
 type Theme = "light" | "dark";
 type RuleId =
   | "hl7_cda_mapping"
@@ -346,6 +346,262 @@ const StatusPill = ({ value }: { value: string }) => (
   <span className={`pill ${value.toLowerCase().replace(/\s+/g, "-")}`}>{value}</span>
 );
 
+const documentationSections = [
+  "Overview",
+  "Workflow",
+  "HL7 input",
+  "FHIR output",
+  "Scoring",
+  "Backend",
+  "Demo",
+];
+
+const fhirExample = `{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:patient-1",
+      "resource": {
+        "resourceType": "Patient",
+        "identifier": [{ "system": "urn:mrn", "value": "SYN-001" }]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "status": "final",
+        "code": { "coding": [{ "system": "http://loinc.org", "code": "718-7" }] },
+        "subject": { "reference": "urn:uuid:patient-1" },
+        "valueQuantity": { "value": 132, "unit": "g/L" }
+      }
+    }
+  ]
+}`;
+
+const DocumentationPage = ({
+  onCreate,
+  onData,
+}: {
+  onCreate: () => void;
+  onData: () => void;
+}) => (
+  <section className="docs-plane">
+    <div className="docs-hero">
+      <div>
+        <span>Documentation</span>
+        <h1>HL7 evaluation guide</h1>
+        <p>
+          Product documentation for assessing whether clinical AI output is ready to become
+          structured FHIR JSON for review, analytics, and HealthLake-style ingestion.
+        </p>
+      </div>
+      <div className="docs-hero-actions">
+        <button type="button" onClick={onCreate}>
+          <UploadCloud aria-hidden="true" />
+          New evaluation
+        </button>
+        <button type="button" onClick={onData}>
+          <Boxes aria-hidden="true" />
+          Evidence
+        </button>
+      </div>
+    </div>
+
+    <div className="docs-layout">
+      <nav className="docs-toc" aria-label="Documentation sections">
+        <strong>Contents</strong>
+        {documentationSections.map((section) => (
+          <a href={`#${section.toLowerCase().replace(/\s+/g, "-")}`} key={section}>
+            {section}
+          </a>
+        ))}
+      </nav>
+
+      <div className="docs-content">
+        <section className="docs-section" id="overview">
+          <div className="docs-section-head">
+            <span>01</span>
+            <h2>Overview</h2>
+          </div>
+          <p>
+            The tool is an evaluation layer for a clinical document conversion pipeline. It does
+            not replace a production converter. It tests whether AI-generated FHIR resources are
+            faithful to the source clinical bundle, structurally usable, privacy-aware, and suitable
+            for controlled ingestion review.
+          </p>
+          <div className="docs-card-grid three">
+            <div className="docs-card">
+              <FileJson aria-hidden="true" />
+              <strong>Input</strong>
+              <span>CDA, C-CDA, XML, PDF, policy files, and optional candidate JSON.</span>
+            </div>
+            <div className="docs-card">
+              <TestTube2 aria-hidden="true" />
+              <strong>Evaluation</strong>
+              <span>Builds cases, scores mappings, detects risks, and creates findings.</span>
+            </div>
+            <div className="docs-card">
+              <ShieldCheck aria-hidden="true" />
+              <strong>Decision</strong>
+              <span>Returns Ready, Conditional, or Not Ready with evidence and blockers.</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="docs-section" id="workflow">
+          <div className="docs-section-head">
+            <span>02</span>
+            <h2>Workflow</h2>
+          </div>
+          <div className="pipeline-doc">
+            {[
+              ["Upload", "Clinical bundle, references, policy, candidate output."],
+              ["Build cases", "Split inputs into resource-specific evaluation tasks."],
+              ["Generate/check", "Use uploaded output or platform model candidate."],
+              ["Score", "Measure faithfulness, coverage, compliance, privacy, latency."],
+              ["Review", "Show decision, cases, issues, and evidence table."],
+            ].map(([title, body], index) => (
+              <div className="pipeline-step-doc" key={title}>
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <strong>{title}</strong>
+                <small>{body}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="docs-section" id="hl7-input">
+          <div className="docs-section-head">
+            <span>03</span>
+            <h2>HL7 input</h2>
+          </div>
+          <p>
+            HL7 is the standards organisation and product family. CDA is document-oriented:
+            it represents a clinical document with header context and body sections. C-CDA is an
+            implementation guide that constrains CDA templates for common clinical note types.
+          </p>
+          <div className="schema-grid">
+            <div className="schema-card">
+              <strong>CDA document</strong>
+              <dl>
+                <div><dt>ClinicalDocument</dt><dd>Root XML document.</dd></div>
+                <div><dt>recordTarget</dt><dd>Patient identity context.</dd></div>
+                <div><dt>author / custodian</dt><dd>Source and document ownership.</dd></div>
+                <div><dt>structuredBody</dt><dd>Sections such as problems, meds, results.</dd></div>
+                <div><dt>entry</dt><dd>Machine-readable clinical statements.</dd></div>
+              </dl>
+            </div>
+            <div className="schema-card">
+              <strong>Evaluation focus</strong>
+              <dl>
+                <div><dt>Identity</dt><dd>Patient references remain consistent.</dd></div>
+                <div><dt>Semantics</dt><dd>Codes preserve clinical meaning.</dd></div>
+                <div><dt>Units</dt><dd>Values and units stay comparable.</dd></div>
+                <div><dt>Traceability</dt><dd>FHIR fields can be linked back to source evidence.</dd></div>
+                <div><dt>Privacy</dt><dd>Unnecessary PHI is not leaked into output.</dd></div>
+              </dl>
+            </div>
+          </div>
+        </section>
+
+        <section className="docs-section" id="fhir-output">
+          <div className="docs-section-head">
+            <span>04</span>
+            <h2>FHIR output</h2>
+          </div>
+          <p>
+            FHIR represents healthcare data as modular resources. This prototype focuses on a
+            Bundle containing resources such as Patient, Observation, DiagnosticReport, Condition,
+            and MedicationRequest.
+          </p>
+          <div className="schema-grid">
+            <div className="schema-card">
+              <strong>Core resources</strong>
+              <dl>
+                <div><dt>Bundle</dt><dd>Container for resources and exchange payloads.</dd></div>
+                <div><dt>Patient</dt><dd>Identity, demographics, identifiers.</dd></div>
+                <div><dt>Observation</dt><dd>Measurements and simple clinical assertions.</dd></div>
+                <div><dt>DiagnosticReport</dt><dd>Report context and linked observations.</dd></div>
+                <div><dt>Condition</dt><dd>Problems, diagnoses, and clinical status.</dd></div>
+              </dl>
+            </div>
+            <pre className="code-panel" aria-label="FHIR Bundle example">
+              <code>{fhirExample}</code>
+            </pre>
+          </div>
+        </section>
+
+        <section className="docs-section" id="scoring">
+          <div className="docs-section-head">
+            <span>05</span>
+            <h2>Scoring</h2>
+          </div>
+          <div className="score-doc-grid">
+            {[
+              ["Faithfulness", "Does each generated field match the source clinical fact?"],
+              ["Coverage", "Were important source facts converted instead of omitted?"],
+              ["Compliance", "Does the JSON follow expected FHIR structure and coding?"],
+              ["Privacy", "Is unnecessary PHI avoided and policy respected?"],
+              ["Latency", "Is processing practical for the intended review workflow?"],
+              ["Decision", "Ready, Conditional, or Not Ready based on risk and blockers."],
+            ].map(([title, body]) => (
+              <div key={title}>
+                <strong>{title}</strong>
+                <span>{body}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="docs-section" id="backend">
+          <div className="docs-section-head">
+            <span>06</span>
+            <h2>Backend</h2>
+          </div>
+          <div className="backend-map">
+            <div><strong>React + Vite</strong><span>Frontend console hosted from S3 and CloudFront.</span></div>
+            <div><strong>API Gateway</strong><span>Creates evaluations, signs uploads, and reads run status.</span></div>
+            <div><strong>S3</strong><span>Stores uploaded clinical bundles, references, policies, and outputs.</span></div>
+            <div><strong>Step Functions</strong><span>Orchestrates validation, case building, scoring, and finalisation.</span></div>
+            <div><strong>Lambda</strong><span>Runs parsing, model calls, scoring, persistence, and API handlers.</span></div>
+            <div><strong>DynamoDB</strong><span>Stores evaluation metadata, status, scores, findings, and cases.</span></div>
+          </div>
+        </section>
+
+        <section className="docs-section" id="demo">
+          <div className="docs-section-head">
+            <span>07</span>
+            <h2>Demo</h2>
+          </div>
+          <ol className="demo-list">
+            <li>Open Create and upload a clinical bundle plus reference FHIR JSON.</li>
+            <li>Choose Uploaded output if you already have candidate FHIR from a pipeline.</li>
+            <li>Run the evaluation and wait for the workflow to complete.</li>
+            <li>Use Results for the readiness decision and Data for case-level evidence.</li>
+            <li>Discuss failed or review cases as controlled-ingestion blockers.</li>
+          </ol>
+          <div className="reference-row">
+            <a href="https://hl7.org/fhir/R4/bundle.html" target="_blank" rel="noreferrer">
+              FHIR Bundle R4
+            </a>
+            <a href="https://hl7.org/fhir/R4/observation.html" target="_blank" rel="noreferrer">
+              FHIR Observation R4
+            </a>
+            <a
+              href="https://projectlifedashboard.hl7.org/specifications/hl7-cda-r2-implementation-guide-consolidated-cda-templates-for-clinical-notes-release-2-1/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              C-CDA R2.1
+            </a>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+);
+
 const navGroups: Array<{
   title?: string;
   items: Array<{ id: ViewId; label: string; icon: typeof LayoutDashboard }>;
@@ -428,7 +684,8 @@ const readInitialView = (): ViewId => {
     requested === "data" ||
     requested === "results" ||
     requested === "create" ||
-    requested === "settings"
+    requested === "settings" ||
+    requested === "documentation"
     ? requested
     : "results";
 };
@@ -489,6 +746,17 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem("capability-readiness-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get("view") === view) {
+      return;
+    }
+
+    params.set("view", view);
+    window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+  }, [view]);
 
   const selectedEvaluation = useMemo(
     () => evaluations.find((evaluation) => evaluation.id === selectedId) ?? demoEvaluation,
@@ -686,14 +954,20 @@ function App() {
                 })}
               </div>
             ))}
-            <button className="docs-link" type="button">
+            <button
+              className={view === "documentation" ? "docs-link active" : "docs-link"}
+              type="button"
+              onClick={() => setView("documentation")}
+            >
               <BookOpen aria-hidden="true" />
               Documentation
             </button>
           </aside>
 
           <section className="workspace">
-            {view === "create" ? (
+            {view === "documentation" ? (
+              <DocumentationPage onCreate={() => setView("create")} onData={() => setView("data")} />
+            ) : view === "create" ? (
               <div className="create-plane">
                 <div className="plane-head">
                   <span>Create evaluation</span>
