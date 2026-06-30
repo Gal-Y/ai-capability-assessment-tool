@@ -29,6 +29,7 @@ jobs:
       CDK_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_EVALUATOR_MODEL: ${{ secrets.OPENAI_EVALUATOR_MODEL || 'gpt-5.4-mini' }}
+      VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL || 'https://vjatwbhknc.execute-api.us-east-1.amazonaws.com' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,8 +52,8 @@ jobs:
         shell: bash
         run: |
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            echo "stack_id=AiCapabilityAssessmentToolStack" >> "$GITHUB_OUTPUT"
-            echo "stack_name=AiCapabilityAssessmentToolStack" >> "$GITHUB_OUTPUT"
+            echo "stack_id=Hl7CapabilityAssessmentLiveV2Stack" >> "$GITHUB_OUTPUT"
+            echo "stack_name=Hl7CapabilityAssessmentLiveV2Stack" >> "$GITHUB_OUTPUT"
             echo "action=deploy" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event.action }}" == "closed" ]]; then
             echo "stack_id=AiCapabilityAssessmentToolPr${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"

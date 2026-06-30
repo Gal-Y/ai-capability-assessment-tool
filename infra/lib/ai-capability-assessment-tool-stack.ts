@@ -98,7 +98,7 @@ export class AiCapabilityAssessmentToolStack extends Stack {
         name: "evaluationId",
         type: dynamodb.AttributeType.STRING,
       },
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      encryption: dynamodb.TableEncryption.DEFAULT,
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
