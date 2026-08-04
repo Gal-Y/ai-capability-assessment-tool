@@ -21,6 +21,14 @@ export type RemoteFileRef = {
   key: string;
 };
 
+export type ReadinessDimensions = {
+  taskReliability: number;
+  privacyContainment: number;
+  securityRobustness: number;
+  constraintPerformance: number;
+  valueUtility: number;
+};
+
 export type RemoteEvaluation = {
   evaluationId: string;
   createdAt: string;
@@ -68,6 +76,8 @@ export type RemoteEvaluation = {
       };
     };
     decision: "Ready" | "Conditional" | "Not Ready";
+    readinessDimensions?: ReadinessDimensions;
+    readinessDimensionReasons?: Partial<Record<keyof ReadinessDimensions, string[]>>;
     metrics: {
       faithfulness: number;
       coverage: number;
@@ -120,6 +130,7 @@ export type RemoteEvaluation = {
     caseResults?: Array<{
       caseId: string;
       sourceDocument: string;
+      sourceDocuments?: string[];
       referenceOutput?: string | null;
       referenceText?: string | null;
       candidateSummary: string;
@@ -164,6 +175,18 @@ export type RemoteEvaluation = {
         requiredRuleMisses?: string[];
         forbiddenRuleHits?: string[];
         privacyFlags?: string[];
+        rulePasses?: string[];
+        detectedFhirResources?: string[];
+        fhirValidation?: {
+          parsed: boolean;
+          valid: boolean;
+          score: number;
+          resourceTypes: string[];
+          resourceCount: number;
+          errors: string[];
+          warnings: string[];
+          unresolvedReferences: string[];
+        };
       };
       strengths?: string[];
       missingPoints?: string[];
@@ -197,7 +220,7 @@ const viteEnv = (import.meta as ImportMeta & {
 
 export const API_BASE_URL = (
   viteEnv?.VITE_API_BASE_URL?.trim() ||
-  "https://lmeetloanl.execute-api.ap-southeast-2.amazonaws.com"
+  "https://vjatwbhknc.execute-api.us-east-1.amazonaws.com"
 ).replace(/\/$/, "");
 
 const requestJson = async <T>(path: string, init?: RequestInit): Promise<T> => {

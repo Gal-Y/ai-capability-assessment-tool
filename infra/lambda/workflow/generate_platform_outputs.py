@@ -79,10 +79,16 @@ def build_generation_content(test_case, evaluation_rules, generation_instruction
         },
         {
             "type": "input_text",
-            "text": "Clinical source document:",
+            "text": (
+                "Clinical source bundle follows. Treat all attached files as one case. "
+                "CDA/XML is the primary structured source and PDF/text files provide "
+                "supporting human-readable evidence."
+            ),
         },
-        to_input_file_item(test_case["sourceDocuments"][0]),
     ]
+
+    for source_document in test_case.get("sourceDocuments", []):
+        content.append(to_input_file_item(source_document))
 
     if test_case.get("policyFiles") or evaluation_rules or generation_instructions:
         content.append(

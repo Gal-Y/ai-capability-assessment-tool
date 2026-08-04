@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test:workflow": "PYTHONPYCACHEPREFIX=/tmp/thesis-workflow-pycache python3 -m unittest discover -s infra/tests -p 'test_*.py'",
     "preview": "vite preview",
     "infra:synth": "npx cdk synth",
     "infra:deploy": "npx cdk deploy",

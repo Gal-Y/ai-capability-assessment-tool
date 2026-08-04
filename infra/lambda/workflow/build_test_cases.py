@@ -19,8 +19,51 @@ def handler(event, _context):
     document_formats = input_profile.get("documentFormats", [])
     reference_formats = input_profile.get("referenceFormats", [])
     candidate_output_formats = input_profile.get("candidateOutputFormats", [])
+    config = event.get("config", {})
+    documents = event.get("documents", [])
+    bundle_mode = (
+        config.get("caseMode") == "clinical-bundle"
+        or (len(documents) > 1 and len(ai_outputs) <= 1)
+    )
 
-    for index, document in enumerate(event.get("documents", []), start=1):
+    if bundle_mode:
+        source_formats = [
+            document_formats[index] if index < len(document_formats) else "UNKNOWN"
+            for index, _document in enumerate(documents)
+        ]
+        test_cases.append(
+            {
+                "caseId": "case-001",
+                "sourceDocuments": documents,
+                "referenceOutputs": reference_outputs,
+                "policyFiles": policy_files,
+                "uploadedOutput": ai_outputs[0] if ai_outputs else None,
+                "inputProfile": {
+                    "scope": input_profile.get(
+                        "scope", "HL7_CDA_TO_FHIR_EVALUATION"
+                    ),
+                    "caseMode": "clinical-bundle",
+                    "sourceFormat": " + ".join(source_formats),
+                    "sourceFormats": source_formats,
+                    "referenceFormat": (
+                        " + ".join(reference_formats)
+                        if reference_formats
+                        else "UNKNOWN"
+                    ),
+                    "candidateOutputFormat": (
+                        candidate_output_formats[0]
+                        if candidate_output_formats
+                        else "PLATFORM_GENERATED_FHIR_JSON"
+                    ),
+                    "expectedTargetStandard": input_profile.get(
+                        "expectedTargetStandard",
+                        "HL7 FHIR R4 JSON",
+                    ),
+                },
+            }
+        )
+
+    for index, document in enumerate([] if bundle_mode else documents, start=1):
         mapped_output = ai_outputs[index - 1] if index - 1 < len(ai_outputs) else None
         reference_output = (
             reference_outputs[index - 1]

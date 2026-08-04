@@ -8,12 +8,227 @@
     />
     <meta
       name="description"
-      content="AI Capability Assessment Tool MVP for document summarisation readiness."
+      content="Evaluate HL7 CDA and companion PDF evidence against generated FHIR R4 for healthcare deployment readiness."
     />
-    <title>AI Capability Assessment Tool</title>
+    <title>Galen Clinical Readiness</title>
+    <script>
+      (() => {
+        try {
+          const stored = window.localStorage.getItem("capability-readiness-theme");
+          const theme =
+            stored === "light" || stored === "dark"
+              ? stored
+              : window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          document.documentElement.dataset.theme = theme;
+        } catch {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
+    <style>
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        margin: 0;
+      }
+
+      body {
+        background: #f4f5f8;
+      }
+
+      html[data-theme="dark"] body {
+        background: #0d0f14;
+      }
+
+      .boot-shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: 56px 1fr;
+        background: #f4f5f8;
+        color: #171a21;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+
+      html[data-theme="dark"] .boot-shell {
+        background: #0d0f14;
+        color: #edf0f8;
+      }
+
+      .boot-top {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 20px;
+        border-bottom: 1px solid rgba(23, 26, 33, 0.09);
+        background: #ffffff;
+      }
+
+      html[data-theme="dark"] .boot-top {
+        border-color: rgba(235, 240, 255, 0.09);
+        background: #151821;
+      }
+
+      .boot-mark {
+        width: 30px;
+        height: 30px;
+        border-radius: 9px;
+        background: #5646e5;
+      }
+
+      html[data-theme="dark"] .boot-mark {
+        background: #8b7bff;
+      }
+
+      .boot-brand {
+        display: grid;
+        gap: 5px;
+      }
+
+      .boot-line {
+        display: block;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(130, 136, 150, 0.22);
+        overflow: hidden;
+        position: relative;
+      }
+
+      .boot-line::after,
+      .boot-card::after {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+        content: "";
+        animation: boot-shimmer 1.15s ease-in-out infinite;
+      }
+
+      .boot-line.title {
+        width: 150px;
+      }
+
+      .boot-line.sub {
+        width: 118px;
+        opacity: 0.78;
+      }
+
+      .boot-main {
+        display: grid;
+        grid-template-columns: 216px minmax(0, 1fr);
+      }
+
+      .boot-side {
+        border-right: 1px solid rgba(23, 26, 33, 0.09);
+        padding: 22px 12px;
+      }
+
+      html[data-theme="dark"] .boot-side {
+        border-color: rgba(235, 240, 255, 0.09);
+      }
+
+      .boot-nav {
+        height: 34px;
+        border-radius: 8px;
+        background: rgba(86, 70, 229, 0.12);
+      }
+
+      html[data-theme="dark"] .boot-nav {
+        background: rgba(139, 123, 255, 0.16);
+      }
+
+      .boot-content {
+        display: grid;
+        align-content: start;
+        gap: 16px;
+        padding: 28px 30px;
+      }
+
+      .boot-head {
+        display: grid;
+        gap: 10px;
+        width: min(360px, 90%);
+      }
+
+      .boot-head .title {
+        height: 24px;
+        width: 240px;
+      }
+
+      .boot-cards {
+        display: grid;
+        grid-template-columns: 1.5fr repeat(3, 1fr);
+        gap: 12px;
+      }
+
+      .boot-card {
+        min-height: 126px;
+        border: 1px solid rgba(23, 26, 33, 0.09);
+        border-radius: 12px;
+        background: #ffffff;
+        overflow: hidden;
+        position: relative;
+      }
+
+      html[data-theme="dark"] .boot-card {
+        border-color: rgba(235, 240, 255, 0.09);
+        background: #151821;
+      }
+
+      @keyframes boot-shimmer {
+        from {
+          transform: translateX(-100%);
+        }
+        to {
+          transform: translateX(100%);
+        }
+      }
+
+      @media (max-width: 760px) {
+        .boot-main {
+          grid-template-columns: 1fr;
+        }
+
+        .boot-side {
+          display: none;
+        }
+
+        .boot-cards {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-shell" aria-label="Loading application">
+        <div class="boot-top">
+          <div class="boot-mark"></div>
+          <div class="boot-brand">
+            <span class="boot-line title"></span>
+            <span class="boot-line sub"></span>
+          </div>
+        </div>
+        <div class="boot-main">
+          <aside class="boot-side">
+            <div class="boot-nav"></div>
+          </aside>
+          <main class="boot-content">
+            <div class="boot-head">
+              <span class="boot-line title"></span>
+              <span class="boot-line sub"></span>
+            </div>
+            <div class="boot-cards">
+              <div class="boot-card"></div>
+              <div class="boot-card"></div>
+              <div class="boot-card"></div>
+              <div class="boot-card"></div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

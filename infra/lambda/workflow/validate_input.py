@@ -77,8 +77,10 @@ def handler(event, _context):
 
         if not ai_outputs:
             raise ValueError("Uploaded output mode requires aiOutputs")
-        if len(ai_outputs) != len(documents):
-            raise ValueError("Upload exactly one AI output for each source document")
+        if len(ai_outputs) not in {1, len(documents)}:
+            raise ValueError(
+                "Upload one candidate for the clinical bundle or one candidate per source document"
+            )
 
     input_profile = build_input_profile(event)
 
@@ -89,6 +91,12 @@ def handler(event, _context):
         "policyCount": len(event.get("policyFiles", [])),
         "outputCount": len(event.get("aiOutputs", [])),
         "modelId": config.get("modelId"),
+        "caseMode": (
+            "clinical-bundle"
+            if config.get("caseMode") == "clinical-bundle"
+            or len(event.get("aiOutputs", [])) == 1
+            else "per-document"
+        ),
         "inputProfile": input_profile,
     }
     validation_key = write_artifact(event, "workflow/validation.json", validation)

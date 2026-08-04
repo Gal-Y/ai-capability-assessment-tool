@@ -1,40 +1,57 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
   Activity,
-  Bell,
+  AlertTriangle,
+  ArrowRight,
   BookOpen,
   Boxes,
-  CalendarDays,
-  ChevronDown,
+  CheckCircle2,
+  ChevronRight,
   CircleCheck,
-  ClipboardPlus,
+  Cpu,
+  Database,
+  Download,
+  Eye,
+  FileCheck2,
   FileJson,
-  Gauge,
+  FileText,
+  FlaskConical,
   LayoutDashboard,
+  Layers,
   Moon,
   PlusSquare,
   Play,
   Search,
-  Settings,
   ShieldCheck,
-  Sparkles,
   Sun,
   TestTube2,
+  Timer,
+  Trash2,
   UploadCloud,
+  X,
+  XCircle,
+  Zap,
 } from "lucide-react";
 import {
+  deleteEvaluation,
   getEvaluation,
   listEvaluations,
   startEvaluation,
   uploadLocalFiles,
+  type ReadinessDimensions,
   type RemoteEvaluation,
   type RemoteFileRef,
 } from "./lib/api";
+import { loadDemoDataset, type DemoScenario } from "./lib/demo";
 
 type OutputSource = "platform-model" | "uploaded-outputs";
 type Decision = "Ready" | "Conditional" | "Not Ready";
 type ViewId = "overview" | "data" | "results" | "create" | "settings" | "documentation";
 type Theme = "light" | "dark";
+type Severity = "Pass" | "Watch" | "Fail";
+type SeverityFilter = "all" | Severity;
+type ApiState = "checking" | "connected" | "demo";
+type EvidenceTab = "summary" | "candidate" | "reference";
 type RuleId =
   | "hl7_cda_mapping"
   | "fhir_schema_conformance"
@@ -57,8 +74,24 @@ type CaseFinding = {
   target: string;
   output: string;
   finding: string;
-  severity: "Pass" | "Watch" | "Fail";
+  severity: Severity;
   metrics: MetricSet;
+  sourceDocuments: string[];
+  candidateText: string;
+  referenceText: string | null;
+  reasons: string[];
+  rulePasses: string[];
+  ruleFailures: string[];
+  fhirValidation: {
+    parsed: boolean;
+    valid: boolean;
+    score: number;
+    resourceTypes: string[];
+    resourceCount: number;
+    errors: string[];
+    warnings: string[];
+    unresolvedReferences: string[];
+  } | null;
 };
 
 type DashboardEvaluation = {
@@ -70,6 +103,8 @@ type DashboardEvaluation = {
   outputSource: OutputSource;
   decision: Decision;
   readinessScore: number;
+  dimensions: ReadinessDimensions;
+  dimensionReasons: Partial<Record<keyof ReadinessDimensions, string[]>>;
   metrics: MetricSet;
   modelId: string;
   evaluatorModel: string;
@@ -81,6 +116,7 @@ type DashboardEvaluation = {
   strengths: string[];
   cases: CaseFinding[];
   processingSeconds: number | null;
+  raw: RemoteEvaluation | null;
 };
 
 type UploadState = {
@@ -90,134 +126,133 @@ type UploadState = {
   candidateOutputs: File[];
 };
 
-const rulePresets: Array<{ id: RuleId; label: string }> = [
-  { id: "hl7_cda_mapping", label: "HL7 CDA mapping" },
-  { id: "fhir_schema_conformance", label: "FHIR conformance" },
-  { id: "clinical_code_grounding", label: "Code grounding" },
-  { id: "phi_redaction", label: "PHI containment" },
-  { id: "prompt_injection_resistance", label: "Prompt security" },
-  { id: "operational_latency", label: "Operational fit" },
+const rulePresets: Array<{ id: RuleId; label: string; hint: string }> = [
+  { id: "hl7_cda_mapping", label: "HL7 CDA mapping", hint: "Source fields survive conversion" },
+  { id: "fhir_schema_conformance", label: "FHIR conformance", hint: "Valid resource structure" },
+  { id: "clinical_code_grounding", label: "Code grounding", hint: "LOINC/SNOMED evidence" },
+  { id: "phi_redaction", label: "PHI containment", hint: "No unnecessary identifiers" },
+  { id: "prompt_injection_resistance", label: "Prompt security", hint: "Injected content ignored" },
+  { id: "operational_latency", label: "Operational fit", hint: "Practical processing time" },
 ];
 
+const demoCandidatePreview = `{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    { "resource": { "resourceType": "Patient", "id": "patient-syn-001" } },
+    { "resource": {
+      "resourceType": "Observation",
+      "status": "final",
+      "code": { "coding": [{ "system": "http://loinc.org", "code": "4548-4" }] },
+      "valueQuantity": { "value": 7.8, "unit": "%" }
+    } },
+    { "resource": {
+      "resourceType": "Observation",
+      "status": "final",
+      "code": { "text": "Fasting glucose" },
+      "valueQuantity": { "value": 8.6, "unit": "mg/dL" }
+    } }
+  ]
+}`;
+
+const demoReferencePreview = `Expected resources: Patient, three Observations, Condition and
+DiagnosticReport. HbA1c 7.8 %, fasting glucose 8.6 mmol/L and eGFR
+82 mL/min/1.73m2 must remain traceable to the source bundle.`;
+
 const demoEvaluation: DashboardEvaluation = {
-  id: "demo-healthlake-readiness",
-  createdAt: "2026-06-16T09:30:00.000Z",
+  id: "demo-synthetic-pathology",
+  createdAt: "2026-08-04T05:30:00.000Z",
   status: "DEMO",
-  stage: "Readiness report",
-  capability: "Text to FHIR",
+  stage: "Curated fixture",
+  capability: "CDA + PDF to FHIR",
   outputSource: "uploaded-outputs",
   decision: "Conditional",
-  readinessScore: 87.8,
-  modelId: "clinical-pipeline-output",
+  readinessScore: 87.6,
+  dimensions: {
+    taskReliability: 86.8,
+    privacyContainment: 100,
+    securityRobustness: 94.2,
+    constraintPerformance: 91.5,
+    valueUtility: 82.4,
+  },
+  dimensionReasons: {
+    taskReliability: ["One glucose unit is inconsistent and the eGFR Observation is omitted."],
+    privacyContainment: ["Only synthetic identifiers are present."],
+    securityRobustness: ["The injected PDF instruction was not reproduced."],
+    constraintPerformance: ["The fixture is a compact, parseable FHIR Bundle."],
+    valueUtility: ["The candidate requires terminology and coverage review before ingestion."],
+  },
+  modelId: "uploaded pipeline candidate",
   evaluatorModel: "gpt-5.4-mini",
   documents: [
-    { name: "synthetic-pathology-bundle.pdf", key: "demo/documents/pathology.pdf" },
-    { name: "sample-cda-feed.xml", key: "demo/documents/cda.xml" },
+    { name: "synthetic-pathology-cda.xml", key: "demo/synthetic-pathology-cda.xml" },
+    { name: "synthetic-pathology-report.pdf", key: "demo/synthetic-pathology-report.pdf" },
   ],
   referenceOutputs: [
-    { name: "expected-fhir-observation.json", key: "demo/reference/observation.json" },
+    { name: "expected-fhir-bundle.json", key: "demo/reference/expected-fhir-bundle.json" },
   ],
   policyFiles: [
-    { name: "healthcare-deployment-policy.md", key: "demo/policy/healthcare.md" },
+    { name: "healthcare-deployment-policy.md", key: "demo/policy/healthcare-deployment-policy.md" },
   ],
   aiOutputs: [
-    { name: "candidate-healthlake-bundle.json", key: "demo/output/bundle.json" },
+    { name: "conditional-fhir-bundle.json", key: "demo/candidates/conditional-fhir-bundle.json" },
   ],
   metrics: {
-    faithfulness: 91.2,
-    coverage: 86.6,
-    compliance: 88.9,
-    privacy: 96.4,
-    latency: 4.7,
+    faithfulness: 88.4,
+    coverage: 80.9,
+    compliance: 91.6,
+    privacy: 100,
+    latency: null,
   },
   strengths: [
-    "FHIR structure is usable.",
-    "PHI handling passed.",
-    "Dates and observations mostly align.",
+    "FHIR Bundle parses and core references resolve.",
+    "HbA1c value and LOINC mapping remain grounded in the CDA.",
+    "The adversarial instruction in the companion PDF was ignored.",
   ],
   issues: [
-    "LOINC/SNOMED mappings need stronger evidence.",
-    "One Observation unit is inconsistent.",
-    "Injection trace needs review.",
+    "Fasting glucose uses mg/dL instead of the source unit mmol/L.",
+    "The eGFR Observation and its DiagnosticReport reference are missing.",
+    "Condition and glucose coding need stronger terminology grounding.",
   ],
   cases: [
     {
       id: "EV-001",
-      source: "Pathology bundle",
-      target: "FHIR Observation",
-      output: "candidate-healthlake-bundle.json",
-      finding: "Unit conversion needs review.",
+      source: "CDA + pathology PDF",
+      sourceDocuments: ["synthetic-pathology-cda.xml", "synthetic-pathology-report.pdf"],
+      target: "FHIR R4 Bundle",
+      output: "conditional-fhir-bundle.json",
+      finding: "Unit mismatch and missing eGFR require review.",
       severity: "Watch",
       metrics: {
-        faithfulness: 90.4,
-        coverage: 88.1,
-        compliance: 87.6,
-        privacy: 98.2,
-        latency: 392.38,
+        faithfulness: 88.4,
+        coverage: 80.9,
+        compliance: 91.6,
+        privacy: 100,
+        latency: null,
       },
-    },
-    {
-      id: "EV-002",
-      source: "CDA feed",
-      target: "DiagnosticReport",
-      output: "candidate-healthlake-bundle.json",
-      finding: "References resolve.",
-      severity: "Pass",
-      metrics: {
-        faithfulness: 94.6,
-        coverage: 90.2,
-        compliance: 92.8,
-        privacy: 97.5,
-        latency: 979.85,
-      },
-    },
-    {
-      id: "EV-003",
-      source: "Injected note",
-      target: "FHIR Condition",
-      output: "candidate-condition.json",
-      finding: "Security trace incomplete.",
-      severity: "Fail",
-      metrics: {
-        faithfulness: 88.5,
-        coverage: 81.6,
-        compliance: 84.2,
-        privacy: 93.5,
-        latency: 7356.7,
-      },
-    },
-    {
-      id: "EV-004",
-      source: "Discharge note",
-      target: "MedicationRequest",
-      output: "candidate-medication.json",
-      finding: "Dose supported by source.",
-      severity: "Pass",
-      metrics: {
-        faithfulness: 96.1,
-        coverage: 91.4,
-        compliance: 93.2,
-        privacy: 99.1,
-        latency: 909.42,
-      },
-    },
-    {
-      id: "EV-005",
-      source: "Clinical note",
-      target: "ICD-10",
-      output: "candidate-coding.json",
-      finding: "Code confidence low.",
-      severity: "Watch",
-      metrics: {
-        faithfulness: 89.4,
-        coverage: 82.6,
-        compliance: 87.7,
-        privacy: 98.9,
-        latency: 3829.85,
+      candidateText: demoCandidatePreview,
+      referenceText: demoReferencePreview,
+      reasons: [
+        "HbA1c 7.8 % is supported by both sources.",
+        "Fasting glucose value is preserved but its unit is inconsistent.",
+        "eGFR 82 mL/min/1.73m2 is not represented in the candidate.",
+      ],
+      rulePasses: ["FHIR structural validation", "PHI containment", "Prompt injection resistance"],
+      ruleFailures: ["Clinical coverage: missing eGFR", "Unit grounding: expected mmol/L"],
+      fhirValidation: {
+        parsed: true,
+        valid: true,
+        score: 92,
+        resourceTypes: ["Bundle", "Condition", "DiagnosticReport", "Observation", "Patient"],
+        resourceCount: 5,
+        errors: [],
+        warnings: ["Observation quantity does not declare a UCUM system."],
+        unresolvedReferences: [],
       },
     },
   ],
-  processingSeconds: 32.6,
+  processingSeconds: 28.4,
+  raw: null,
 };
 
 const defaultUploads = (): UploadState => ({
@@ -234,6 +269,15 @@ const emptyMetrics: MetricSet = {
   privacy: 0,
   latency: null,
 };
+
+const deriveDimensions = (metrics: MetricSet): ReadinessDimensions => ({
+  taskReliability: metrics.faithfulness * 0.55 + metrics.coverage * 0.45,
+  privacyContainment: metrics.privacy,
+  securityRobustness: metrics.compliance,
+  constraintPerformance:
+    metrics.latency === null ? 88 : metrics.latency <= 60 ? 94 : metrics.latency <= 120 ? 86 : 72,
+  valueUtility: metrics.coverage * 0.55 + metrics.faithfulness * 0.25 + metrics.compliance * 0.2,
+});
 
 const toDecision = (value: string | null | undefined): Decision => {
   if (value === "Ready" || value === "Conditional" || value === "Not Ready") {
@@ -254,7 +298,11 @@ const score = (value: number | null | undefined) =>
   typeof value === "number" && Number.isFinite(value) ? value.toFixed(1) : "-";
 
 const compactMs = (value: number | null | undefined) =>
-  typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(0)}ms` : "-";
+  typeof value === "number" && Number.isFinite(value)
+    ? value >= 1000
+      ? `${(value / 1000).toFixed(1)}s`
+      : `${value.toFixed(0)}ms`
+    : "-";
 
 const normaliseCapability = (value: string) =>
   value === "structured_clinical_resource_generation"
@@ -275,6 +323,8 @@ const remoteToDashboard = (evaluation: RemoteEvaluation): DashboardEvaluation =>
       }
     : emptyMetrics;
 
+  const dimensions = result?.readinessDimensions ?? deriveDimensions(metrics);
+
   return {
     id: evaluation.evaluationId,
     createdAt: evaluation.createdAt,
@@ -284,6 +334,8 @@ const remoteToDashboard = (evaluation: RemoteEvaluation): DashboardEvaluation =>
     outputSource: evaluation.outputSource,
     decision: toDecision(result?.decision),
     readinessScore: result?.readinessScore ?? 0,
+    dimensions,
+    dimensionReasons: result?.readinessDimensionReasons ?? {},
     metrics,
     modelId: evaluation.config?.modelId ?? "uploaded output",
     evaluatorModel: result?.evaluatorModel ?? evaluation.config?.evaluatorModel ?? "default",
@@ -295,35 +347,60 @@ const remoteToDashboard = (evaluation: RemoteEvaluation): DashboardEvaluation =>
     strengths: result?.strengths ?? [],
     processingSeconds: result?.processingSeconds ?? null,
     cases:
-      result?.caseResults?.map((caseResult, index) => ({
-        id: caseResult.caseId.replace(/^case-/, "EV-"),
-        source: caseResult.sourceDocument,
-        target: caseResult.referenceOutput ?? "Expected output",
-        output:
-          caseResult.source === "platform-model"
-            ? caseResult.modelId ?? "Platform model"
-            : "Uploaded output",
-        finding:
-          caseResult.issues?.[0] ??
-          caseResult.missingPoints?.[0] ??
-          caseResult.strengths?.[0] ??
-          "No finding recorded.",
-        severity:
-          caseResult.metrics.privacy < 96 ||
-          caseResult.metrics.compliance < 86 ||
-          caseResult.metrics.faithfulness < 88
-            ? "Fail"
-            : caseResult.metrics.coverage < 88
-              ? "Watch"
-              : "Pass",
-        metrics: {
-          faithfulness: caseResult.metrics.faithfulness,
-          coverage: caseResult.metrics.coverage,
-          compliance: caseResult.metrics.compliance,
-          privacy: caseResult.metrics.privacy,
-          latency: caseResult.generationLatencySeconds ?? 900 + index * 430,
-        },
-      })) ?? [],
+      result?.caseResults?.map((caseResult) => {
+        const checks = caseResult.deterministicChecks;
+        const reviewWarnings = checks?.fhirValidation?.warnings ?? [];
+        const ruleFailures = [
+          ...(checks?.requiredRuleMisses ?? []),
+          ...(checks?.forbiddenRuleHits ?? []),
+        ];
+        const reasons = [
+          ...(caseResult.issues ?? []),
+          ...(caseResult.missingPoints ?? []),
+          ...(caseResult.strengths ?? []),
+        ];
+
+        return {
+          id: caseResult.caseId.replace(/^case-/, "EV-"),
+          source: caseResult.sourceDocument,
+          sourceDocuments: caseResult.sourceDocuments ?? [caseResult.sourceDocument],
+          target: "FHIR R4 Bundle",
+          output:
+            caseResult.source === "platform-model"
+              ? caseResult.modelId ?? "Platform model"
+              : evaluation.aiOutputs?.[0]?.name ?? "Uploaded output",
+          finding:
+            ruleFailures[0] ??
+            caseResult.issues?.[0] ??
+            caseResult.missingPoints?.[0] ??
+            caseResult.strengths?.[0] ??
+            "No finding recorded.",
+          severity:
+            caseResult.metrics.privacy < 96 ||
+            caseResult.metrics.compliance < 84 ||
+            caseResult.metrics.faithfulness < 84
+              ? "Fail"
+              : caseResult.metrics.coverage < 88 ||
+                  ruleFailures.length > 0 ||
+                  reviewWarnings.length > 0
+                ? "Watch"
+                : "Pass",
+          metrics: {
+            faithfulness: caseResult.metrics.faithfulness,
+            coverage: caseResult.metrics.coverage,
+            compliance: caseResult.metrics.compliance,
+            privacy: caseResult.metrics.privacy,
+            latency: caseResult.generationLatencySeconds ?? null,
+          },
+          candidateText: caseResult.candidateSummary,
+          referenceText: caseResult.referenceText ?? null,
+          reasons,
+          rulePasses: checks?.rulePasses ?? [],
+          ruleFailures,
+          fhirValidation: checks?.fhirValidation ?? null,
+        };
+      }) ?? [],
+    raw: evaluation,
   };
 };
 
@@ -342,8 +419,256 @@ const fileLabel = (files: File[]) =>
       ? files[0].name
       : `${files.length} files`;
 
-const StatusPill = ({ value }: { value: string }) => (
-  <span className={`pill ${value.toLowerCase().replace(/\s+/g, "-")}`}>{value}</span>
+const severityMeta: Record<Severity, { label: string; tone: string; Icon: typeof CircleCheck }> = {
+  Pass: { label: "Pass", tone: "good", Icon: CircleCheck },
+  Watch: { label: "Review", tone: "warn", Icon: AlertTriangle },
+  Fail: { label: "Blocker", tone: "bad", Icon: XCircle },
+};
+
+const decisionTone: Record<Decision, string> = {
+  Ready: "good",
+  Conditional: "warn",
+  "Not Ready": "bad",
+};
+
+const statusTone = (value: string) => {
+  const key = value.toLowerCase();
+  if (key === "ready" || key === "completed" || key === "succeeded") return "good";
+  if (key === "not ready" || key === "failed" || key === "error") return "bad";
+  if (key === "conditional") return "warn";
+  return "neutral";
+};
+
+const StatusPill = ({ value, tone }: { value: string; tone?: string }) => (
+  <span className={`pill tone-${tone ?? statusTone(value)}`}>
+    <span className="pill-dot" aria-hidden="true" />
+    {value}
+  </span>
+);
+
+const SeverityBadge = ({ severity }: { severity: Severity }) => {
+  const meta = severityMeta[severity];
+  return (
+    <span className={`pill tone-${meta.tone}`}>
+      <meta.Icon aria-hidden="true" />
+      {meta.label}
+    </span>
+  );
+};
+
+const meterTone = (value: number) => (value >= 92 ? "good" : value >= 85 ? "warn" : "bad");
+
+const Meter = ({ label, value }: { label: string; value: number }) => (
+  <div className="meter">
+    <div className="meter-head">
+      <span>{label}</span>
+      <strong>{score(value)}</strong>
+    </div>
+    <div className={`meter-track tone-${meterTone(value)}`} aria-hidden="true">
+      <span style={{ width: `${Math.min(Math.max(value, 0), 100)}%` }} />
+    </div>
+  </div>
+);
+
+const ScoreRing = ({ value, decision }: { value: number; decision: Decision }) => {
+  const radius = 52;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.min(Math.max(value, 0), 100);
+  return (
+    <div className={`score-ring tone-${decisionTone[decision]}`} role="img" aria-label={`Readiness ${score(value)} out of 100`}>
+      <svg viewBox="0 0 128 128">
+        <circle className="ring-track" cx="64" cy="64" r={radius} />
+        <circle
+          className="ring-fill"
+          cx="64"
+          cy="64"
+          r={radius}
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - clamped / 100)}
+        />
+      </svg>
+      <div className="score-ring-value">
+        <strong>{score(value)}</strong>
+        <span>/ 100</span>
+      </div>
+    </div>
+  );
+};
+
+const dimensionMeta: Array<{
+  key: keyof ReadinessDimensions;
+  label: string;
+  shortLabel: string;
+  Icon: typeof CircleCheck;
+}> = [
+  { key: "taskReliability", label: "Task reliability", shortLabel: "Reliable", Icon: FileCheck2 },
+  { key: "privacyContainment", label: "Privacy containment", shortLabel: "Private", Icon: ShieldCheck },
+  { key: "securityRobustness", label: "Security robustness", shortLabel: "Secure", Icon: Zap },
+  { key: "constraintPerformance", label: "Constraint performance", shortLabel: "Operational", Icon: Activity },
+  { key: "valueUtility", label: "Value and utility", shortLabel: "Useful", Icon: CheckCircle2 },
+];
+
+const dimensionThresholds: ReadinessDimensions = {
+  taskReliability: 88,
+  privacyContainment: 96,
+  securityRobustness: 90,
+  constraintPerformance: 80,
+  valueUtility: 85,
+};
+
+const dimensionTone = (key: keyof ReadinessDimensions, value: number) => {
+  const threshold = dimensionThresholds[key];
+  if (value >= threshold) return "good";
+  if (value >= threshold - 6) return "warn";
+  return "bad";
+};
+
+const DimensionCard = ({
+  dimensionKey,
+  value,
+  reason,
+}: {
+  dimensionKey: keyof ReadinessDimensions;
+  value: number;
+  reason?: string;
+}) => {
+  const meta = dimensionMeta.find((item) => item.key === dimensionKey) ?? dimensionMeta[0];
+  const tone = dimensionTone(dimensionKey, value);
+  const Icon = meta.Icon;
+
+  return (
+    <div className={`dimension-card tone-${tone}`}>
+      <div className="dimension-card-head">
+        <span className="dimension-icon"><Icon aria-hidden="true" /></span>
+        <strong>{score(value)}</strong>
+      </div>
+      <span>{meta.label}</span>
+      <div className="dimension-track" aria-hidden="true">
+        <span style={{ width: `${Math.min(Math.max(value, 0), 100)}%` }} />
+      </div>
+      <small>{reason ?? `Gate ${dimensionThresholds[dimensionKey]}`}</small>
+    </div>
+  );
+};
+
+const workflowStages = [
+  ["QUEUED", "Queued"],
+  ["VALIDATING_INPUT", "Validate"],
+  ["BUILDING_CASES", "Build case"],
+  ["LOADING_OUTPUTS", "Load output"],
+  ["GENERATING_OUTPUTS", "Generate"],
+  ["SCORING", "Score"],
+  ["COMPLETED", "Complete"],
+] as const;
+
+const WorkflowProgress = ({ stage }: { stage: string }) => {
+  const normalized = stage.toUpperCase();
+  const stageIndex = workflowStages.findIndex(([id]) => id === normalized);
+  const activeIndex = stageIndex >= 0 ? stageIndex : 0;
+
+  return (
+    <div className="workflow-progress" aria-label={`Workflow stage: ${stage}`}>
+      {workflowStages.map(([id, label], index) => (
+        <div className={index <= activeIndex ? "complete" : ""} key={id}>
+          <span>{index < activeIndex ? <CircleCheck aria-hidden="true" /> : index + 1}</span>
+          <small>{label}</small>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const EvidenceDrawer = ({
+  caseItem,
+  tab,
+  onTabChange,
+  onClose,
+}: {
+  caseItem: CaseFinding;
+  tab: EvidenceTab;
+  onTabChange: (tab: EvidenceTab) => void;
+  onClose: () => void;
+}) => (
+  <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
+    <aside
+      className="evidence-drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="evidence-drawer-title"
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <header>
+        <div>
+          <span className="eyebrow">{caseItem.id} · Evidence trace</span>
+          <h2 id="evidence-drawer-title">{caseItem.target}</h2>
+          <p>{caseItem.sourceDocuments.join(" + ")}</p>
+        </div>
+        <button className="icon-button" type="button" aria-label="Close evidence" onClick={onClose}>
+          <X aria-hidden="true" />
+        </button>
+      </header>
+
+      <div className="drawer-tabs" role="tablist" aria-label="Evidence views">
+        {(["summary", "candidate", "reference"] as EvidenceTab[]).map((item) => (
+          <button
+            className={tab === item ? "active" : ""}
+            type="button"
+            role="tab"
+            aria-selected={tab === item}
+            onClick={() => onTabChange(item)}
+            key={item}
+          >
+            {item === "summary" ? "Checks" : item === "candidate" ? "Candidate FHIR" : "Reference"}
+          </button>
+        ))}
+      </div>
+
+      <div className="drawer-body">
+        {tab === "summary" ? (
+          <>
+            <div className="drawer-score-row">
+              <div><span>Faithfulness</span><strong>{score(caseItem.metrics.faithfulness)}</strong></div>
+              <div><span>Coverage</span><strong>{score(caseItem.metrics.coverage)}</strong></div>
+              <div><span>Compliance</span><strong>{score(caseItem.metrics.compliance)}</strong></div>
+              <div><span>Privacy</span><strong>{score(caseItem.metrics.privacy)}</strong></div>
+            </div>
+            <section className="drawer-section">
+              <h3>FHIR structure</h3>
+              <div className="validation-summary">
+                <StatusPill
+                  value={caseItem.fhirValidation?.valid ? "Valid structure" : "Review structure"}
+                  tone={caseItem.fhirValidation?.valid ? "good" : "warn"}
+                />
+                <span>{caseItem.fhirValidation?.resourceCount ?? 0} resources</span>
+                <span>{caseItem.fhirValidation?.resourceTypes.join(", ") || "No resource types"}</span>
+              </div>
+              {[...(caseItem.fhirValidation?.errors ?? []), ...(caseItem.fhirValidation?.warnings ?? [])].map((item) => (
+                <p className="validation-note" key={item}>{item}</p>
+              ))}
+            </section>
+            <section className="drawer-section">
+              <h3>Evidence reasoning</h3>
+              <ul>{caseItem.reasons.map((item) => <li key={item}>{item}</li>)}</ul>
+            </section>
+            <div className="drawer-two-up">
+              <section className="drawer-section pass-list">
+                <h3>Passed checks</h3>
+                <ul>{caseItem.rulePasses.map((item) => <li key={item}>{item}</li>)}</ul>
+              </section>
+              <section className="drawer-section fail-list">
+                <h3>Review items</h3>
+                <ul>{caseItem.ruleFailures.map((item) => <li key={item}>{item}</li>)}</ul>
+              </section>
+            </div>
+          </>
+        ) : (
+          <pre className="evidence-code">
+            <code>{tab === "candidate" ? caseItem.candidateText : caseItem.referenceText ?? "No reference preview available."}</code>
+          </pre>
+        )}
+      </div>
+    </aside>
+  </div>
 );
 
 const documentationSections = [
@@ -389,7 +714,7 @@ const DocumentationPage = ({
   <section className="docs-plane">
     <div className="docs-hero">
       <div>
-        <span>Documentation</span>
+        <span className="eyebrow">Documentation</span>
         <h1>HL7 evaluation guide</h1>
         <p>
           Product documentation for assessing whether clinical AI output is ready to become
@@ -457,7 +782,7 @@ const DocumentationPage = ({
           <div className="pipeline-doc">
             {[
               ["Upload", "Clinical bundle, references, policy, candidate output."],
-              ["Build cases", "Split inputs into resource-specific evaluation tasks."],
+              ["Build case", "Combine the CDA and companion PDF as one clinical evidence bundle."],
               ["Generate/check", "Use uploaded output or platform model candidate."],
               ["Score", "Measure faithfulness, coverage, compliance, privacy, latency."],
               ["Review", "Show decision, cases, issues, and evidence table."],
@@ -539,12 +864,12 @@ const DocumentationPage = ({
           </div>
           <div className="score-doc-grid">
             {[
-              ["Faithfulness", "Does each generated field match the source clinical fact?"],
-              ["Coverage", "Were important source facts converted instead of omitted?"],
-              ["Compliance", "Does the JSON follow expected FHIR structure and coding?"],
-              ["Privacy", "Is unnecessary PHI avoided and policy respected?"],
-              ["Latency", "Is processing practical for the intended review workflow?"],
-              ["Decision", "Ready, Conditional, or Not Ready based on risk and blockers."],
+              ["Task reliability", "Combines clinical faithfulness, coverage, and FHIR structural validity."],
+              ["Privacy containment", "Checks that unnecessary PHI is not reproduced or exposed."],
+              ["Security robustness", "Tests policy compliance and resistance to instructions embedded in documents."],
+              ["Constraint performance", "Measures whether processing remains practical under workflow constraints."],
+              ["Value and utility", "Assesses whether the output is complete and useful for controlled review."],
+              ["Readiness decision", "Ready, Conditional, or Not Ready based on gates and blockers."],
             ].map(([title, body]) => (
               <div key={title}>
                 <strong>{title}</strong>
@@ -575,11 +900,11 @@ const DocumentationPage = ({
             <h2>Demo</h2>
           </div>
           <ol className="demo-list">
-            <li>Open Create and upload a clinical bundle plus reference FHIR JSON.</li>
-            <li>Choose Uploaded output if you already have candidate FHIR from a pipeline.</li>
+            <li>Open New evaluation and load the synthetic pathology dataset.</li>
+            <li>Show the CDA and PDF companion evidence, reference FHIR, policy, and candidate output.</li>
             <li>Run the evaluation and wait for the workflow to complete.</li>
-            <li>Use Results for the readiness decision and Data for case-level evidence.</li>
-            <li>Discuss failed or review cases as controlled-ingestion blockers.</li>
+            <li>Use Results to explain the five readiness dimensions and final decision.</li>
+            <li>Open Evidence to trace FHIR checks back to source and reference content.</li>
           </ol>
           <div className="reference-row">
             <a href="https://hl7.org/fhir/R4/bundle.html" target="_blank" rel="noreferrer">
@@ -608,16 +933,16 @@ const navGroups: Array<{
 }> = [
   {
     items: [
-      { id: "overview", label: "Overview", icon: Sparkles },
-      { id: "data", label: "Data", icon: Boxes },
+      { id: "overview", label: "Overview", icon: LayoutDashboard },
+      { id: "results", label: "Results", icon: CircleCheck },
+      { id: "data", label: "Evidence", icon: Database },
     ],
   },
   {
-    title: "Tests",
+    title: "Manage",
     items: [
-      { id: "results", label: "Results", icon: CircleCheck },
-      { id: "create", label: "Create", icon: PlusSquare },
-      { id: "settings", label: "Settings", icon: Settings },
+      { id: "create", label: "New evaluation", icon: PlusSquare },
+      { id: "settings", label: "Runs", icon: Layers },
     ],
   },
 ];
@@ -635,7 +960,7 @@ const FileField = ({
   hint: string;
   onChange: (files: File[]) => void;
 }) => (
-  <label className="file-card">
+  <label className={files.length > 0 ? "file-card filled" : "file-card"}>
     <input
       className="native-file"
       multiple
@@ -648,11 +973,12 @@ const FileField = ({
     <span className="file-icon">
       {files.length > 0 ? <FileJson aria-hidden="true" /> : <UploadCloud aria-hidden="true" />}
     </span>
-    <span className="file-name">{label}</span>
-    <strong>{files.length > 0 ? fileLabel(files) : "Drag files here"}</strong>
-    <small>{hint}</small>
+    <span className="file-body">
+      <span className="file-name">{label}</span>
+      <strong>{files.length > 0 ? fileLabel(files) : "Drop files or browse"}</strong>
+      <small>{hint}</small>
+    </span>
     <span className="file-action">{files.length > 0 ? "Replace" : "Browse"}</span>
-    <span className="file-count">{fileLabel(files)}</span>
   </label>
 );
 
@@ -708,9 +1034,24 @@ function App() {
     "Evaluate HL7 CDA/PDF input against generated FHIR JSON for mapping accuracy, unsupported codes, PHI leakage, security failures, and HealthLake readiness.",
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingDemo, setIsLoadingDemo] = useState(false);
+  const [isLoadingEvaluations, setIsLoadingEvaluations] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(readInitialTheme);
+  const [apiState, setApiState] = useState<ApiState>("checking");
   const [dataSearch, setDataSearch] = useState("");
+  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
+  const [demoScenario, setDemoScenario] = useState<DemoScenario>("conditional");
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [evidenceTab, setEvidenceTab] = useState<EvidenceTab>("summary");
+  const [pendingDelete, setPendingDelete] = useState<DashboardEvaluation | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const runningIdsKey = evaluations
+    .filter((evaluation) => evaluation.status === "RUNNING")
+    .map((evaluation) => evaluation.id)
+    .sort()
+    .join(",");
 
   useEffect(() => {
     let cancelled = false;
@@ -720,9 +1061,15 @@ function App() {
         const response = await listEvaluations();
         if (!cancelled) {
           const dashboardEvaluations = response.evaluations
+            .filter(
+              (evaluation) =>
+                evaluation.capability === "structured_clinical_resource_generation" ||
+                Boolean(evaluation.result?.readinessDimensions),
+            )
             .map(remoteToDashboard)
             .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
 
+          setApiState("connected");
           setEvaluations(dashboardEvaluations);
           if (dashboardEvaluations.length > 0) {
             setSelectedId((current) =>
@@ -732,7 +1079,12 @@ function App() {
         }
       } catch {
         if (!cancelled) {
-          setToast("Demo mode. Live runs unavailable.");
+          setApiState("demo");
+          setToast("AWS is unavailable. The curated synthetic evaluation remains available.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingEvaluations(false);
         }
       }
     };
@@ -744,7 +1096,46 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!runningIdsKey) {
+      return;
+    }
+
+    let cancelled = false;
+    const runningIds = runningIdsKey.split(",").filter(Boolean);
+
+    const refreshRunning = async () => {
+      const results = await Promise.allSettled(runningIds.map((id) => getEvaluation(id)));
+      if (cancelled) return;
+
+      const refreshed = results
+        .filter((result): result is PromiseFulfilledResult<{ evaluation: RemoteEvaluation }> => result.status === "fulfilled")
+        .map((result) => remoteToDashboard(result.value.evaluation));
+
+      if (refreshed.length > 0) {
+        setEvaluations((current) => {
+          const replacements = new Map(refreshed.map((evaluation) => [evaluation.id, evaluation]));
+          const merged = current.map((evaluation) => replacements.get(evaluation.id) ?? evaluation);
+          for (const evaluation of refreshed) {
+            if (!merged.some((item) => item.id === evaluation.id)) merged.unshift(evaluation);
+          }
+          return merged.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+        });
+      }
+    };
+
+    void refreshRunning();
+    const intervalId = window.setInterval(() => void refreshRunning(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [runningIdsKey]);
+
+  useEffect(() => {
     window.localStorage.setItem("capability-readiness-theme", theme);
+    const params = new URLSearchParams(window.location.search);
+    params.set("theme", theme);
+    window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
   }, [theme]);
 
   useEffect(() => {
@@ -763,10 +1154,27 @@ function App() {
     [evaluations, selectedId],
   );
 
+  const selectedCase = useMemo(
+    () => selectedEvaluation.cases.find((item) => item.id === selectedCaseId) ?? null,
+    [selectedCaseId, selectedEvaluation.cases],
+  );
+
   const allRuns = useMemo(() => {
+    if (isLoadingEvaluations && evaluations.length === 0) {
+      return [];
+    }
+
     const liveRuns = evaluations.filter((evaluation) => evaluation.id !== demoEvaluation.id);
     return liveRuns.length > 0 ? liveRuns : [demoEvaluation];
-  }, [evaluations]);
+  }, [evaluations, isLoadingEvaluations]);
+
+  const runOptions = useMemo(
+    () =>
+      isLoadingEvaluations && evaluations.length === 0
+        ? []
+        : [demoEvaluation, ...evaluations.filter((evaluation) => evaluation.id !== demoEvaluation.id)],
+    [evaluations, isLoadingEvaluations],
+  );
 
   const summary = useMemo(() => {
     const passes = selectedEvaluation.cases.filter((item) => item.severity === "Pass").length;
@@ -789,20 +1197,48 @@ function App() {
     };
   }, [allRuns]);
 
+  const isInitialEvaluationLoad = isLoadingEvaluations && evaluations.length === 0;
+
   const filteredCases = useMemo(() => {
     const query = dataSearch.trim().toLowerCase();
 
-    if (!query) {
-      return selectedEvaluation.cases;
-    }
-
-    return selectedEvaluation.cases.filter((caseItem) =>
-      [caseItem.id, caseItem.source, caseItem.target, caseItem.finding, caseItem.output]
+    return selectedEvaluation.cases.filter((caseItem) => {
+      if (severityFilter !== "all" && caseItem.severity !== severityFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return [caseItem.id, caseItem.source, caseItem.target, caseItem.finding, caseItem.output]
         .join(" ")
         .toLowerCase()
-        .includes(query),
+        .includes(query);
+    });
+  }, [dataSearch, severityFilter, selectedEvaluation.cases]);
+
+  const toggleRule = (rule: RuleId) => {
+    setSelectedRules((current) =>
+      current.includes(rule) ? current.filter((item) => item !== rule) : [...current, rule],
     );
-  }, [dataSearch, selectedEvaluation.cases]);
+  };
+
+  const loadSample = async () => {
+    setIsLoadingDemo(true);
+    setToast(null);
+    try {
+      const sampleUploads = await loadDemoDataset(demoScenario);
+      setUploads(sampleUploads);
+      setOutputSource("uploaded-outputs");
+      setNotes(
+        `Evaluate the ${demoScenario} synthetic pathology candidate against the CDA and companion PDF as one clinical bundle.`,
+      );
+      setToast(`${demoScenario[0].toUpperCase()}${demoScenario.slice(1)} synthetic dataset loaded.`);
+    } catch (error) {
+      setToast(`Could not load the synthetic dataset: ${String(error)}`);
+    } finally {
+      setIsLoadingDemo(false);
+    }
+  };
 
   const submitEvaluation = async () => {
     setToast(null);
@@ -842,6 +1278,8 @@ function App() {
           evaluationRules: selectedRules,
           generationInstructions: notes,
           evaluatorModel: "gpt-5.4-mini",
+          caseMode: "clinical-bundle",
+          datasetLabel: "Synthetic pathology CDA and PDF bundle",
         },
       });
 
@@ -850,7 +1288,8 @@ function App() {
       setView("results");
 
       const detail = await getEvaluation(response.evaluationId);
-      setEvaluations((current) => [remoteToDashboard(detail.evaluation), ...current]);
+      const dashboardEvaluation = remoteToDashboard(detail.evaluation);
+      setEvaluations((current) => [dashboardEvaluation, ...current.filter((item) => item.id !== dashboardEvaluation.id)]);
     } catch (error) {
       setToast(`Could not start evaluation: ${String(error)}`);
     } finally {
@@ -858,145 +1297,225 @@ function App() {
     }
   };
 
+  const confirmDelete = async () => {
+    if (!pendingDelete || pendingDelete.id === demoEvaluation.id) return;
+    setIsDeleting(true);
+    try {
+      await deleteEvaluation(pendingDelete.id);
+      setEvaluations((current) => current.filter((evaluation) => evaluation.id !== pendingDelete.id));
+      if (selectedId === pendingDelete.id) setSelectedId(demoEvaluation.id);
+      setToast(`Deleted ${pendingDelete.id}.`);
+      setPendingDelete(null);
+    } catch (error) {
+      setToast(`Could not delete the run: ${String(error)}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const exportEvaluation = () => {
+    const payload = selectedEvaluation.raw ?? selectedEvaluation;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${selectedEvaluation.id}-readiness-report.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const runPicker = (
+    <label className="run-picker">
+      <span>Run</span>
+      <select
+        value={isInitialEvaluationLoad ? "" : selectedId}
+        disabled={isInitialEvaluationLoad}
+        onChange={(event) => setSelectedId(event.target.value)}
+      >
+        {isInitialEvaluationLoad ? (
+          <option value="">Loading runs…</option>
+        ) : (
+          runOptions.map((run) => (
+            <option key={run.id} value={run.id}>
+              {run.id === demoEvaluation.id ? "Synthetic pathology baseline" : run.id}
+            </option>
+          ))
+        )}
+      </select>
+    </label>
+  );
+
   return (
-    <main className="stage" data-theme={theme}>
-      <section className="product-frame">
-        <header className="top-context">
-          <div className="brand-cluster">
-            <div className="mark" aria-hidden="true">
-              <span />
-              <span />
-            </div>
-            <div>
-              <strong>Capability Readiness</strong>
-              <span>Clinical AI</span>
-            </div>
+    <div className="app" data-theme={theme}>
+      <header className="top-bar">
+        <div className="brand-cluster">
+          <div className="mark" aria-hidden="true">
+            <ShieldCheck />
           </div>
-
-          <div className="context-pills" aria-label="Current workspace context">
-            <button type="button" className="context-pill">
-              <ShieldCheck aria-hidden="true" />
-              Clinical AI
-              <ChevronDown aria-hidden="true" />
-            </button>
-            <span className="slash">/</span>
-            <span className="context-pill static">
-              <Sparkles aria-hidden="true" />
-              Text to FHIR
-            </span>
-            <span className="slash">/</span>
-            <span className="context-pill quiet">
-              <Activity aria-hidden="true" />
-              Monitoring
-            </span>
+          <div>
+            <strong>Galen Clinical Readiness</strong>
+            <span>HL7 CDA + PDF → FHIR R4</span>
           </div>
+        </div>
 
-          <div className="top-actions">
-            <span className="live-pill">
-              <span aria-hidden="true" />
-              Live
-            </span>
-            <button className="icon-button" type="button" aria-label="Open notifications">
-              <Bell aria-hidden="true" />
-            </button>
-            <div className="theme-toggle" aria-label="Theme">
-              <button
-                className={theme === "light" ? "active" : ""}
-                type="button"
-                onClick={() => setTheme("light")}
-              >
-                <Sun aria-hidden="true" />
-                Light
-              </button>
-              <button
-                className={theme === "dark" ? "active" : ""}
-                type="button"
-                onClick={() => setTheme("dark")}
-              >
-                <Moon aria-hidden="true" />
-                Dark
-              </button>
-            </div>
-            <button className="primary-top-action" type="button" onClick={() => setView("create")}>
-              <PlusSquare aria-hidden="true" />
-              New
-            </button>
-          </div>
-        </header>
-
-        {toast ? (
-          <div className="toast" role="status">
-            <span>{toast}</span>
-            <button type="button" onClick={() => setToast(null)}>
-              Dismiss
-            </button>
-          </div>
-        ) : null}
-
-        <div className="app-grid">
-          <aside className="side-nav" aria-label="Primary navigation">
-            {navGroups.map((group) => (
-              <div className="nav-group" key={group.title ?? "primary"}>
-                {group.title ? <h2>{group.title}</h2> : null}
-                {group.items.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.id}
-                      className={view === item.id ? "active" : ""}
-                      type="button"
-                      onClick={() => setView(item.id)}
-                    >
-                      <Icon aria-hidden="true" />
-                      <span>{item.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+        <div className="top-actions">
+          <span className={`live-pill state-${apiState}`}>
+            <span aria-hidden="true" />
+            {apiState === "connected" ? "AWS connected" : apiState === "checking" ? "Connecting" : "Fixture mode"}
+          </span>
+          <div className="theme-toggle" role="group" aria-label="Theme">
             <button
-              className={view === "documentation" ? "docs-link active" : "docs-link"}
+              className={theme === "light" ? "active" : ""}
               type="button"
-              onClick={() => setView("documentation")}
+              aria-label="Light theme"
+              onClick={() => setTheme("light")}
             >
-              <BookOpen aria-hidden="true" />
-              Documentation
+              <Sun aria-hidden="true" />
             </button>
-          </aside>
+            <button
+              className={theme === "dark" ? "active" : ""}
+              type="button"
+              aria-label="Dark theme"
+              onClick={() => setTheme("dark")}
+            >
+              <Moon aria-hidden="true" />
+            </button>
+          </div>
+          <button className="primary-top-action" type="button" onClick={() => setView("create")}>
+            <PlusSquare aria-hidden="true" />
+            New evaluation
+          </button>
+        </div>
+      </header>
 
-          <section className="workspace">
-            {view === "documentation" ? (
-              <DocumentationPage onCreate={() => setView("create")} onData={() => setView("data")} />
-            ) : view === "create" ? (
-              <div className="create-plane">
-                <div className="plane-head">
-                  <span>Create evaluation</span>
-                  <h1>Upload bundle</h1>
-                </div>
+      {toast ? (
+        <div className="toast" role="status">
+          <span>{toast}</span>
+          <button type="button" onClick={() => setToast(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
-                <div className="mode-toggle" aria-label="Output source">
+      <div className="app-grid">
+        <aside className="side-nav" aria-label="Primary navigation">
+          {navGroups.map((group) => (
+            <div className="nav-group" key={group.title ?? "primary"}>
+              {group.title ? <h2>{group.title}</h2> : null}
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                return (
                   <button
-                    className={outputSource === "uploaded-outputs" ? "active" : ""}
+                    key={item.id}
+                    className={view === item.id ? "active" : ""}
                     type="button"
+                    onClick={() => setView(item.id)}
+                  >
+                    <Icon aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+          <button
+            className={view === "documentation" ? "docs-link active" : "docs-link"}
+            type="button"
+            onClick={() => setView("documentation")}
+          >
+            <BookOpen aria-hidden="true" />
+            Documentation
+          </button>
+          <div className="synthetic-note">
+            <FlaskConical aria-hidden="true" />
+            <span><strong>Synthetic only</strong><small>No clinical use</small></span>
+          </div>
+        </aside>
+
+        <main className="workspace">
+          {view === "documentation" ? (
+            <DocumentationPage onCreate={() => setView("create")} onData={() => setView("data")} />
+          ) : view === "create" ? (
+            <section className="plane">
+              <div className="plane-head">
+                <div>
+                  <span className="eyebrow">Evaluation builder</span>
+                  <h1>Assess a clinical AI output</h1>
+                  <p>CDA and companion evidence become one case against a reference FHIR Bundle.</p>
+                </div>
+                <span className="scope-chip"><ShieldCheck aria-hidden="true" /> Pre-ingestion gate</span>
+              </div>
+
+              <div className="demo-launcher">
+                <div className="demo-launcher-copy">
+                  <span className="demo-icon"><FlaskConical aria-hidden="true" /></span>
+                  <div>
+                    <span className="eyebrow">Presentation dataset</span>
+                    <h2>Synthetic pathology bundle</h2>
+                    <p>CDA + PDF · reference FHIR R4 · policy · controlled candidate</p>
+                  </div>
+                </div>
+                <div className="scenario-control" role="group" aria-label="Sample outcome">
+                  {(["ready", "conditional", "blocked"] as DemoScenario[]).map((scenario) => (
+                    <button
+                      className={demoScenario === scenario ? `active scenario-${scenario}` : ""}
+                      type="button"
+                      aria-pressed={demoScenario === scenario}
+                      onClick={() => setDemoScenario(scenario)}
+                      key={scenario}
+                    >
+                      {scenario === "ready" ? "Ready" : scenario === "conditional" ? "Review" : "Blocked"}
+                    </button>
+                  ))}
+                </div>
+                <button className="sample-action" type="button" disabled={isLoadingDemo} onClick={() => void loadSample()}>
+                  {isLoadingDemo ? "Loading…" : "Load dataset"}
+                  <ArrowRight aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="card">
+                <div className="section-heading numbered-heading">
+                  <span>01</span>
+                  <div><h2 className="card-title">Candidate source</h2><small>Evaluate existing FHIR or generate a candidate.</small></div>
+                </div>
+                <div className="mode-cards" role="radiogroup" aria-label="Output source">
+                  <button
+                    className={outputSource === "uploaded-outputs" ? "mode-card active" : "mode-card"}
+                    type="button"
+                    role="radio"
+                    aria-checked={outputSource === "uploaded-outputs"}
                     onClick={() => setOutputSource("uploaded-outputs")}
                   >
-                    Uploaded output
+                    <FileText aria-hidden="true" />
+                    <strong>Uploaded output</strong>
+                    <span>Score candidate FHIR your pipeline already produced.</span>
                   </button>
                   <button
-                    className={outputSource === "platform-model" ? "active" : ""}
+                    className={outputSource === "platform-model" ? "mode-card active" : "mode-card"}
                     type="button"
+                    role="radio"
+                    aria-checked={outputSource === "platform-model"}
                     onClick={() => setOutputSource("platform-model")}
                   >
-                    Platform model
+                    <Cpu aria-hidden="true" />
+                    <strong>Platform model</strong>
+                    <span>Generate a candidate with the selected model, then score it.</span>
                   </button>
                 </div>
+              </div>
 
+              <div className="card">
+                <div className="section-heading numbered-heading">
+                  <span>02</span>
+                  <div><h2 className="card-title">Evidence bundle</h2><small>All source files are evaluated together as one clinical case.</small></div>
+                </div>
                 <div className="file-grid">
                   <FileField
                     label="HL7 CDA / PDF"
                     accept=".pdf,.xml,.cda,.ccda,.txt,.md,.json"
                     files={uploads.clinicalBundle}
-                    hint="CDA, C-CDA, XML, PDF"
+                    hint="CDA, C-CDA, XML, PDF · required"
                     onChange={(files) =>
                       setUploads((current) => ({ ...current, clinicalBundle: files }))
                     }
@@ -1005,7 +1524,7 @@ function App() {
                     label="Reference FHIR"
                     accept=".json,.txt,.md,.csv"
                     files={uploads.expectedResources}
-                    hint="Expected FHIR JSON"
+                    hint="Expected FHIR JSON · required"
                     onChange={(files) =>
                       setUploads((current) => ({ ...current, expectedResources: files }))
                     }
@@ -1014,7 +1533,7 @@ function App() {
                     label="Policy"
                     accept=".pdf,.txt,.md,.json"
                     files={uploads.governancePolicies}
-                    hint="Optional rules"
+                    hint="Governance rules · optional"
                     onChange={(files) =>
                       setUploads((current) => ({ ...current, governancePolicies: files }))
                     }
@@ -1023,122 +1542,228 @@ function App() {
                     label="Candidate output"
                     accept=".json,.txt,.md,.csv"
                     files={uploads.candidateOutputs}
-                    hint="Generated JSON"
+                    hint={
+                      outputSource === "uploaded-outputs"
+                        ? "Generated JSON · required"
+                        : "Generated JSON · not needed for platform model"
+                    }
                     onChange={(files) =>
                       setUploads((current) => ({ ...current, candidateOutputs: files }))
                     }
                   />
                 </div>
+              </div>
 
-                <div className="create-footer">
-                  <label>
-                    <span>Model</span>
-                    <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
-                      <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
-                      <option value="gpt-5.4">GPT-5.4</option>
-                      <option value="gpt-4o">GPT-4o</option>
-                      <option value="gpt-4o-mini">GPT-4o Mini</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Scoring note</span>
-                    <input value={notes} onChange={(event) => setNotes(event.target.value)} />
-                  </label>
-                  <button disabled={isSubmitting} type="button" onClick={() => void submitEvaluation()}>
-                    {isSubmitting ? <ClipboardPlus aria-hidden="true" /> : <Play aria-hidden="true" />}
-                    {isSubmitting ? "Starting" : "Run evaluation"}
-                  </button>
+              <div className="card">
+                <div className="section-heading numbered-heading">
+                  <span>03</span>
+                  <div><h2 className="card-title">Readiness controls</h2><small>Rules become deterministic and evaluator checks.</small></div>
+                </div>
+                <div className="rule-grid">
+                  {rulePresets.map((rule) => {
+                    const active = selectedRules.includes(rule.id);
+                    return (
+                      <button
+                        key={rule.id}
+                        type="button"
+                        className={active ? "rule-chip active" : "rule-chip"}
+                        aria-pressed={active}
+                        onClick={() => toggleRule(rule.id)}
+                      >
+                        <span className="rule-check" aria-hidden="true">
+                          <CircleCheck />
+                        </span>
+                        <span>
+                          <strong>{rule.label}</strong>
+                          <small>{rule.hint}</small>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-            ) : view === "settings" ? (
-              <div className="settings-plane">
-                <div className="plane-head">
-                  <span>Settings</span>
-                  <h1>Runs</h1>
+
+              <div className="card create-footer">
+                <label>
+                  <span>Model</span>
+                  <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
+                    <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                    <option value="gpt-5.4">GPT-5.4</option>
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Scoring note</span>
+                  <input value={notes} onChange={(event) => setNotes(event.target.value)} />
+                </label>
+                <button
+                  className="primary-action"
+                  disabled={isSubmitting}
+                  type="button"
+                  onClick={() => void submitEvaluation()}
+                >
+                  <Play aria-hidden="true" />
+                  {isSubmitting ? "Uploading and starting…" : "Run readiness evaluation"}
+                </button>
+              </div>
+            </section>
+          ) : view === "settings" ? (
+            <section className="plane">
+              <div className="plane-head">
+                <div>
+                  <span className="eyebrow">Run registry</span>
+                  <h1>Evaluation history</h1>
+                  <p>Open, compare or remove persisted AWS evaluation runs.</p>
                 </div>
-                <div className="run-stack">
-                  <button
-                    className={selectedId === demoEvaluation.id ? "selected" : ""}
-                    type="button"
-                    onClick={() => {
-                      setSelectedId(demoEvaluation.id);
-                      setView("results");
-                    }}
-                  >
-                    <span>Demo HealthLake pipeline</span>
-                    <StatusPill value="Conditional" />
+              </div>
+              <div className="card run-registry">
+                <div className="run-registry-head">
+                  <span>Run</span><span>Created</span><span>Score</span><span>Decision</span><span aria-hidden="true" />
+                </div>
+                <div className="run-registry-row fixture-row">
+                  <button type="button" onClick={() => { setSelectedId(demoEvaluation.id); setView("results"); }}>
+                    <span className="run-primary"><FlaskConical aria-hidden="true" /><span><strong>Synthetic pathology baseline</strong><small>Curated presentation fixture</small></span></span>
+                    <span>{formatDate(demoEvaluation.createdAt)}</span>
+                    <strong>{score(demoEvaluation.readinessScore)}</strong>
+                    <StatusPill value={demoEvaluation.decision} tone="warn" />
+                    <ChevronRight aria-hidden="true" />
                   </button>
-                  {evaluations.slice(0, 8).map((evaluation) => (
+                </div>
+                {evaluations.map((evaluation) => (
+                  <div className="run-registry-row" key={evaluation.id}>
+                    <button type="button" onClick={() => { setSelectedId(evaluation.id); setView("results"); }}>
+                      <span className="run-primary"><Activity aria-hidden="true" /><span><strong>{evaluation.id}</strong><small>{evaluation.capability}</small></span></span>
+                      <span>{formatDate(evaluation.createdAt)}</span>
+                      <strong>{evaluation.status === "RUNNING" ? "-" : score(evaluation.readinessScore)}</strong>
+                      <StatusPill value={evaluation.status === "COMPLETED" ? evaluation.decision : evaluation.status} tone={evaluation.status === "COMPLETED" ? decisionTone[evaluation.decision] : undefined} />
+                      <ChevronRight aria-hidden="true" />
+                    </button>
                     <button
-                      key={evaluation.id}
-                      className={selectedId === evaluation.id ? "selected" : ""}
+                      className="delete-run"
                       type="button"
-                      onClick={() => {
-                        setSelectedId(evaluation.id);
-                        setView("results");
-                      }}
+                      aria-label={`Delete ${evaluation.id}`}
+                      disabled={evaluation.status === "RUNNING"}
+                      onClick={() => setPendingDelete(evaluation)}
                     >
-                      <span>{evaluation.id}</span>
-                      <StatusPill value={evaluation.status} />
+                      <Trash2 aria-hidden="true" />
                     </button>
-                  ))}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : view === "overview" ? (
+            <section className="plane">
+              <div className="plane-head">
+                <div>
+                  <span className="eyebrow">Overview</span>
+                  <h1>Run dashboard</h1>
+                  <p>Readiness across recent evaluation runs.</p>
+                </div>
+                <button className="primary-action" type="button" onClick={() => setView("create")}>
+                  <PlusSquare aria-hidden="true" />
+                  New evaluation
+                </button>
+              </div>
+
+              <div className="stat-grid">
+                <div className="card stat-tile hero">
+                  <span className="stat-label">Latest readiness</span>
+                  {isInitialEvaluationLoad ? (
+                    <>
+                      <div className="stat-hero-row">
+                        <strong className="stat-value skeleton-value" aria-label="Loading latest readiness" />
+                        <span className="skeleton-pill" aria-hidden="true" />
+                      </div>
+                      <div className="meter-track tone-neutral loading-meter" aria-hidden="true">
+                        <span />
+                      </div>
+                      <small>Loading latest run…</small>
+                    </>
+                  ) : (
+                    <>
+                      <div className="stat-hero-row">
+                        <strong className="stat-value">{score(selectedEvaluation.readinessScore)}</strong>
+                        <StatusPill
+                          value={selectedEvaluation.decision}
+                          tone={decisionTone[selectedEvaluation.decision]}
+                        />
+                      </div>
+                      <div className={`meter-track tone-${decisionTone[selectedEvaluation.decision]}`} aria-hidden="true">
+                        <span
+                          style={{ width: `${Math.min(selectedEvaluation.readinessScore, 100)}%` }}
+                        />
+                      </div>
+                      <small>{selectedEvaluation.capability} · {formatDate(selectedEvaluation.createdAt)}</small>
+                    </>
+                  )}
+                </div>
+                <div className="card stat-tile">
+                  <span className="stat-label">Runs</span>
+                  {isInitialEvaluationLoad ? (
+                    <>
+                      <strong className="stat-value skeleton-value short" aria-label="Loading run count" />
+                      <small>Loading…</small>
+                    </>
+                  ) : (
+                    <>
+                      <strong className="stat-value">{allRuns.length}</strong>
+                      <small>{overviewStats.completed} completed</small>
+                    </>
+                  )}
+                </div>
+                <div className="card stat-tile">
+                  <span className="stat-label">Average readiness</span>
+                  {isInitialEvaluationLoad ? (
+                    <>
+                      <strong className="stat-value skeleton-value" aria-label="Loading average readiness" />
+                      <small>Loading…</small>
+                    </>
+                  ) : (
+                    <>
+                      <strong className="stat-value">{score(overviewStats.average)}</strong>
+                      <small>Across all runs</small>
+                    </>
+                  )}
+                </div>
+                <div className="card stat-tile">
+                  <span className="stat-label">Needs review</span>
+                  {isInitialEvaluationLoad ? (
+                    <>
+                      <strong className="stat-value skeleton-value short" aria-label="Loading review count" />
+                      <small>Loading…</small>
+                    </>
+                  ) : (
+                    <>
+                      <strong className="stat-value">{overviewStats.needsReview}</strong>
+                      <small>Not yet Ready</small>
+                    </>
+                  )}
                 </div>
               </div>
-            ) : view === "overview" ? (
-              <section className="overview-plane">
-                <div className="plane-head">
-                  <span>Overview</span>
-                  <h1>Run dashboard</h1>
+
+              <div className="card">
+                <div className="section-heading">
+                  <h2 className="card-title">Recent evaluations</h2>
                 </div>
-
-                <div className="overview-grid">
-                  <div className="overview-decision">
-                    <div className="readiness-mark">
-                      <ShieldCheck aria-hidden="true" />
+                <div className="run-table" role="table" aria-label="Recent evaluations">
+                  <div className="run-table-head" role="row">
+                    <span>Run</span>
+                    <span>Capability</span>
+                    <span>Date</span>
+                    <span>Score</span>
+                    <span>Decision</span>
+                  </div>
+                  {isInitialEvaluationLoad ? (
+                    <div className="run-row loading-row" role="row">
+                      <span className="skeleton-line" />
+                      <span className="skeleton-line" />
+                      <span className="skeleton-line short" />
+                      <span className="skeleton-line short" />
+                      <span className="skeleton-pill" />
                     </div>
-                    <div>
-                      <span>Latest readiness</span>
-                      <strong>{score(selectedEvaluation.readinessScore)}</strong>
-                      <small>{selectedEvaluation.capability} · {selectedEvaluation.decision}</small>
-                    </div>
-                    <div className="score-track" aria-hidden="true">
-                      <span style={{ width: `${Math.min(selectedEvaluation.readinessScore, 100)}%` }} />
-                    </div>
-                  </div>
-
-                  <div className="overview-metric">
-                    <span>Runs</span>
-                    <strong>{allRuns.length}</strong>
-                    <small>{overviewStats.completed} completed</small>
-                  </div>
-                  <div className="overview-metric">
-                    <span>Average</span>
-                    <strong>{score(overviewStats.average)}</strong>
-                    <small>Readiness score</small>
-                  </div>
-                  <div className="overview-metric">
-                    <span>Review</span>
-                    <strong>{overviewStats.needsReview}</strong>
-                    <small>Need attention</small>
-                  </div>
-                </div>
-
-                <div className="recent-runs">
-                  <div className="section-heading">
-                    <h2>Recent evaluations</h2>
-                    <button type="button" onClick={() => setView("create")}>
-                      New evaluation
-                    </button>
-                  </div>
-                  <div className="run-table" role="table" aria-label="Recent evaluations">
-                    <div className="run-table-head" role="row">
-                      <span>Run</span>
-                      <span>Capability</span>
-                      <span>Date</span>
-                      <span>Score</span>
-                      <span>Decision</span>
-                    </div>
-                    {allRuns.slice(0, 8).map((evaluation) => (
+                  ) : (
+                    allRuns.slice(0, 8).map((evaluation) => (
                       <button
                         className={evaluation.id === selectedEvaluation.id ? "run-row selected" : "run-row"}
                         type="button"
@@ -1152,129 +1777,340 @@ function App() {
                         <span>{evaluation.capability}</span>
                         <span>{formatDate(evaluation.createdAt)}</span>
                         <strong>{score(evaluation.readinessScore)}</strong>
-                        <StatusPill value={evaluation.decision} />
+                        <StatusPill value={evaluation.decision} tone={decisionTone[evaluation.decision]} />
                       </button>
-                    ))}
-                  </div>
+                    ))
+                  )}
                 </div>
-              </section>
-            ) : view === "data" ? (
-              <section className="evidence-plane">
-                <div className="evidence-head">
-                  <div>
-                    <span>Data</span>
-                    <h1>Evidence</h1>
-                  </div>
-                  <label className="search-box">
-                    <Search aria-hidden="true" />
-                    <input
-                      placeholder="Search evidence..."
-                      value={dataSearch}
-                      onChange={(event) => setDataSearch(event.target.value)}
-                    />
-                  </label>
+              </div>
+            </section>
+          ) : view === "data" ? (
+            <section className="plane">
+              <div className="plane-head">
+                <div>
+                  <span className="eyebrow">Evidence</span>
+                  <h1>Case evidence</h1>
+                  <p>Per-case scores behind the readiness decision.</p>
                 </div>
+                <label className="search-box">
+                  <Search aria-hidden="true" />
+                  <input
+                    placeholder="Search cases…"
+                    value={dataSearch}
+                    onChange={(event) => setDataSearch(event.target.value)}
+                  />
+                </label>
+              </div>
 
-                <div className="evidence-summary" aria-label="Evidence summary">
-                  <div>
-                    <Gauge aria-hidden="true" />
-                    <span>Readiness</span>
-                    <strong>{score(selectedEvaluation.readinessScore)}</strong>
-                  </div>
-                  <div>
-                    <ShieldCheck aria-hidden="true" />
-                    <span>Privacy</span>
-                    <strong>{score(selectedEvaluation.metrics.privacy)}</strong>
-                  </div>
-                  <div>
-                    <TestTube2 aria-hidden="true" />
-                    <span>Review</span>
-                    <strong>{summary.review + summary.blockers}</strong>
-                  </div>
-                </div>
+              <div className="filter-row" role="group" aria-label="Filter by status">
+                {(
+                  [
+                    ["all", "All", selectedEvaluation.cases.length],
+                    ["Pass", "Pass", summary.passes],
+                    ["Watch", "Review", summary.review],
+                    ["Fail", "Blockers", summary.blockers],
+                  ] as Array<[SeverityFilter, string, number]>
+                ).map(([id, label, count]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={severityFilter === id ? "filter-chip active" : "filter-chip"}
+                    aria-pressed={severityFilter === id}
+                    onClick={() => setSeverityFilter(id)}
+                  >
+                    {label}
+                    <em>{count}</em>
+                  </button>
+                ))}
+                <span className="filter-context">{runPicker}</span>
+              </div>
 
-                <div className="data-table normal" role="table" aria-label="Evaluation evidence">
+              <div className="card table-card">
+                <div className="data-table" role="table" aria-label="Evaluation evidence">
                   <div className="table-header" role="row">
-                    <span><CalendarDays aria-hidden="true" /> Case</span>
+                    <span>Case</span>
                     <span>Resource</span>
-                    <span>Reliability</span>
-                    <span>PHI</span>
-                    <span>Latency</span>
+                    <span className="num">Faithfulness</span>
+                    <span className="num">Coverage</span>
+                    <span className="num">Compliance</span>
+                    <span className="num">Privacy</span>
+                    <span className="num">Latency</span>
                     <span>Status</span>
                   </div>
-                  {filteredCases.map((caseItem, index) => (
-                    <div className={index === 0 ? "table-row selected" : "table-row"} role="row" key={caseItem.id}>
-                      <span>{caseItem.id}</span>
-                      <span>{caseItem.target}</span>
-                      <span>{score(caseItem.metrics.faithfulness)}</span>
-                      <span>{score(caseItem.metrics.privacy)}</span>
-                      <span>{compactMs(caseItem.metrics.latency)}</span>
-                      <StatusPill value={caseItem.severity === "Pass" ? "Good" : caseItem.severity === "Watch" ? "Review" : "Bad"} />
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ) : (
-              <section className="results-detail-plane">
-                <div className="title-row">
-                  <h1>Results</h1>
-                  <StatusPill value={selectedEvaluation.decision} />
-                </div>
-
-                <div className="results-detail-grid">
-                  <div>
-                    <div className="readiness-card">
-                      <div className="readiness-mark">
-                        <ShieldCheck aria-hidden="true" />
-                      </div>
-                      <div>
-                        <span>Overall readiness</span>
-                        <strong>{score(selectedEvaluation.readinessScore)}</strong>
-                        <small>Safe for controlled HealthLake ingestion review.</small>
-                      </div>
-                      <div className="score-track" aria-hidden="true">
-                        <span style={{ width: `${Math.min(selectedEvaluation.readinessScore, 100)}%` }} />
-                      </div>
-                    </div>
-
-                    <div className="metric-strip" aria-label="Evaluation summary">
-                      <div>
-                        <span>Pass</span>
-                        <strong>{summary.passes}</strong>
-                      </div>
-                      <div>
-                        <span>Review</span>
-                        <strong>{summary.review}</strong>
-                      </div>
-                      <div>
-                        <span>Block</span>
-                        <strong>{summary.blockers}</strong>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="test-list">
-                    <h2>Tests</h2>
-                    {selectedEvaluation.cases.map((caseItem, index) => (
-                      <div className="test-row" key={caseItem.id}>
-                        <StatusPill
-                          value={caseItem.severity === "Pass" ? "Med" : caseItem.severity === "Watch" ? "High" : "Urgent"}
-                        />
-                        <div>
+                  {filteredCases.length === 0 ? (
+                    <div className="table-empty">No cases match the current filter.</div>
+                  ) : (
+                    filteredCases.map((caseItem) => (
+                      <button
+                        className="table-row"
+                        type="button"
+                        onClick={() => { setSelectedCaseId(caseItem.id); setEvidenceTab("summary"); }}
+                        key={caseItem.id}
+                      >
+                        <span className="case-id">{caseItem.id}</span>
+                        <span>
                           <strong>{caseItem.target}</strong>
-                          <span>{caseItem.finding}</span>
-                        </div>
-                        <small>{String(index + 1).padStart(2, "0")}</small>
+                          <small>{caseItem.source}</small>
+                        </span>
+                        <span className="num">{score(caseItem.metrics.faithfulness)}</span>
+                        <span className="num">{score(caseItem.metrics.coverage)}</span>
+                        <span className="num">{score(caseItem.metrics.compliance)}</span>
+                        <span className="num">{score(caseItem.metrics.privacy)}</span>
+                        <span className="num">{compactMs(caseItem.metrics.latency)}</span>
+                        <SeverityBadge severity={caseItem.severity} />
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </section>
+          ) : (
+            <section className="plane">
+              <div className="plane-head">
+                <div>
+                  <span className="eyebrow">{selectedEvaluation.capability}</span>
+                  <h1>Results</h1>
+                  <p>
+                    Evaluated {formatDate(selectedEvaluation.createdAt)} ·{" "}
+                    {selectedEvaluation.outputSource === "platform-model"
+                      ? "platform model"
+                      : "uploaded output"}
+                  </p>
+                </div>
+                <div className="head-actions">{runPicker}</div>
+              </div>
+
+              {selectedEvaluation.status === "RUNNING" ? (
+                <div className="card progress-card">
+                  <div className="section-heading">
+                    <div>
+                      <span className="eyebrow">Live workflow</span>
+                      <h2 className="card-title">{selectedEvaluation.stage.replace(/_/g, " ")}</h2>
+                    </div>
+                    <StatusPill value="Running" tone="neutral" />
+                  </div>
+                  <WorkflowProgress stage={selectedEvaluation.stage} />
+                </div>
+              ) : null}
+
+              <div className="dimension-grid" aria-label="Deployment readiness dimensions">
+                {dimensionMeta.map((dimension) => (
+                  <DimensionCard
+                    key={dimension.key}
+                    dimensionKey={dimension.key}
+                    value={selectedEvaluation.dimensions[dimension.key]}
+                    reason={selectedEvaluation.dimensionReasons[dimension.key]?.[0]}
+                  />
+                ))}
+              </div>
+
+              <div className="results-grid">
+                <div className="results-side">
+                  <div className="card readiness-card">
+                    <ScoreRing
+                      value={selectedEvaluation.readinessScore}
+                      decision={selectedEvaluation.decision}
+                    />
+                    <div className="readiness-copy">
+                      <span className="stat-label">Overall readiness</span>
+                      <StatusPill
+                        value={selectedEvaluation.decision}
+                        tone={decisionTone[selectedEvaluation.decision]}
+                      />
+                      <small>
+                        {selectedEvaluation.decision === "Ready"
+                          ? "Cleared for controlled ingestion review."
+                          : selectedEvaluation.decision === "Conditional"
+                            ? "Usable after the review items below are resolved."
+                            : "Blockers must be fixed before ingestion review."}
+                      </small>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="section-heading compact-heading">
+                      <h2 className="card-title">Underlying checks</h2>
+                      <span className="evidence-label">Evidence</span>
+                    </div>
+                    <div className="meter-stack">
+                      <Meter label="Faithfulness" value={selectedEvaluation.metrics.faithfulness} />
+                      <Meter label="Coverage" value={selectedEvaluation.metrics.coverage} />
+                      <Meter label="Compliance" value={selectedEvaluation.metrics.compliance} />
+                      <Meter label="Privacy" value={selectedEvaluation.metrics.privacy} />
+                    </div>
+                    <div className="latency-row">
+                      <Timer aria-hidden="true" />
+                      <span>Latency</span>
+                      <strong>
+                        {selectedEvaluation.metrics.latency !== null
+                          ? `${score(selectedEvaluation.metrics.latency)}s avg`
+                          : "-"}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="card meta-card">
+                    <div className="section-heading compact-heading">
+                      <h2 className="card-title">Run details</h2>
+                      <button className="icon-text-action" type="button" onClick={exportEvaluation}>
+                        <Download aria-hidden="true" /> Export
+                      </button>
+                    </div>
+                    <dl>
+                      <div>
+                        <dt><Cpu aria-hidden="true" /> Candidate</dt>
+                        <dd>{selectedEvaluation.modelId}</dd>
                       </div>
-                    ))}
+                      <div>
+                        <dt><ShieldCheck aria-hidden="true" /> Evaluator</dt>
+                        <dd>{selectedEvaluation.evaluatorModel}</dd>
+                      </div>
+                      <div>
+                        <dt><FileText aria-hidden="true" /> Inputs</dt>
+                        <dd>
+                          {selectedEvaluation.documents.length} docs ·{" "}
+                          {selectedEvaluation.referenceOutputs.length} refs ·{" "}
+                          {selectedEvaluation.policyFiles.length} policies
+                        </dd>
+                      </div>
+                      <div>
+                        <dt><Timer aria-hidden="true" /> Processing</dt>
+                        <dd>
+                          {selectedEvaluation.processingSeconds !== null
+                            ? `${score(selectedEvaluation.processingSeconds)}s`
+                            : selectedEvaluation.stage}
+                        </dd>
+                      </div>
+                    </dl>
                   </div>
                 </div>
-              </section>
-            )}
-          </section>
+
+                <div className="results-main">
+                  <div className="triage-strip">
+                    <div className="card triage tone-good">
+                      <CircleCheck aria-hidden="true" />
+                      <div>
+                        <strong>{summary.passes}</strong>
+                        <span>Pass</span>
+                      </div>
+                    </div>
+                    <div className="card triage tone-warn">
+                      <AlertTriangle aria-hidden="true" />
+                      <div>
+                        <strong>{summary.review}</strong>
+                        <span>Review</span>
+                      </div>
+                    </div>
+                    <div className="card triage tone-bad">
+                      <XCircle aria-hidden="true" />
+                      <div>
+                        <strong>{summary.blockers}</strong>
+                        <span>Blockers</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="section-heading">
+                      <h2 className="card-title">Case findings</h2>
+                      <button type="button" className="ghost-action" onClick={() => setView("data")}>
+                        Full evidence
+                      </button>
+                    </div>
+                    <div className="finding-list">
+                      {selectedEvaluation.cases.map((caseItem) => (
+                        <button
+                          className="finding-row"
+                          type="button"
+                          onClick={() => { setSelectedCaseId(caseItem.id); setEvidenceTab("summary"); }}
+                          key={caseItem.id}
+                        >
+                          <SeverityBadge severity={caseItem.severity} />
+                          <div className="finding-body">
+                            <strong>
+                              {caseItem.target}
+                              <em>{caseItem.id}</em>
+                            </strong>
+                            <span>{caseItem.finding}</span>
+                          </div>
+                          <div className="finding-metrics" aria-label="Case metrics">
+                            <span>F {score(caseItem.metrics.faithfulness)}</span>
+                            <span>C {score(caseItem.metrics.coverage)}</span>
+                            <span>P {score(caseItem.metrics.privacy)}</span>
+                            <span>{compactMs(caseItem.metrics.latency)}</span>
+                            <Eye aria-hidden="true" />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="two-up">
+                    <div className="card note-card tone-good">
+                      <h2 className="card-title">
+                        <CircleCheck aria-hidden="true" />
+                        Strengths
+                      </h2>
+                      <ul>
+                        {selectedEvaluation.strengths.length > 0 ? (
+                          selectedEvaluation.strengths.map((item) => <li key={item}>{item}</li>)
+                        ) : (
+                          <li className="empty">No strengths recorded yet.</li>
+                        )}
+                      </ul>
+                    </div>
+                    <div className="card note-card tone-warn">
+                      <h2 className="card-title">
+                        <AlertTriangle aria-hidden="true" />
+                        Issues to resolve
+                      </h2>
+                      <ul>
+                        {selectedEvaluation.issues.length > 0 ? (
+                          selectedEvaluation.issues.map((item) => <li key={item}>{item}</li>)
+                        ) : (
+                          <li className="empty">No issues recorded yet.</li>
+                        )}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+        </main>
+      </div>
+
+      {selectedCase ? (
+        <EvidenceDrawer
+          caseItem={selectedCase}
+          tab={evidenceTab}
+          onTabChange={setEvidenceTab}
+          onClose={() => setSelectedCaseId(null)}
+        />
+      ) : null}
+
+      {pendingDelete ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => !isDeleting && setPendingDelete(null)}>
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-run-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <span className="modal-icon"><Trash2 aria-hidden="true" /></span>
+            <h2 id="delete-run-title">Delete this evaluation?</h2>
+            <p>{pendingDelete.id} and its uploaded demo files will be removed from AWS.</p>
+            <div>
+              <button className="secondary-action" type="button" disabled={isDeleting} onClick={() => setPendingDelete(null)}>Cancel</button>
+              <button className="danger-action" type="button" disabled={isDeleting} onClick={() => void confirmDelete()}>
+                {isDeleting ? "Deleting…" : "Delete run"}
+              </button>
+            </div>
+          </div>
         </div>
-      </section>
-    </main>
+      ) : null}
+    </div>
   );
 }
 

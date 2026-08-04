@@ -16,6 +16,7 @@ dist/
 build/
 cdk.out/
 cdk-outputs.json
+tmp/
 
 # Python caches
 __pycache__/
