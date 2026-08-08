@@ -52,6 +52,8 @@ export type RemoteEvaluation = {
     policyText?: string;
     evaluationRules?: string[];
     generationInstructions?: string;
+    datasetLabel?: string;
+    caseMode?: string;
   };
   result?: {
     scoredAt: string;

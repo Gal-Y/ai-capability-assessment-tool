@@ -3,7 +3,9 @@ from openai_client import create_response, extract_output_text
 
 
 GENERATION_INSTRUCTIONS = (
-    "convert unstructured clinical text into structured healthcare resources"
+    "Generate one valid HL7 FHIR R4 Bundle as JSON. Return the JSON object only, with no "
+    "Markdown fence, commentary, or text before or after it. Preserve clinically material "
+    "facts from the source and do not invent unsupported resources, values, units, or codes."
 )
 
 EVALUATION_RULE_PROMPTS = {
@@ -158,7 +160,7 @@ def handler(event, _context):
             input_content=build_generation_content(
                 test_case, evaluation_rules, generation_instructions
             ),
-            max_output_tokens=1200,
+            max_output_tokens=2600,
             reasoning_effort="low",
             verbosity="low",
             metadata={

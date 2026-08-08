@@ -1345,8 +1345,9 @@ def build_case_content(
             "type": "input_text",
             "text": (
                 "Evaluate the candidate structured clinical output against the clinical "
-                "source document, the approved reference output, and any configured rules "
-                "or supporting governance context."
+                "source bundle, any supplied approved reference output, and configured rules "
+                "or supporting governance context. If no reference output is supplied, use "
+                "the source bundle as ground truth."
             ),
         },
         {

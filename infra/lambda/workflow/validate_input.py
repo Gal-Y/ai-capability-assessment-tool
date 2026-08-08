@@ -66,8 +66,8 @@ def handler(event, _context):
     if not documents:
         raise ValueError("At least one document is required")
 
-    if not reference_outputs:
-        raise ValueError("At least one reference output is required")
+    if output_source == "uploaded-outputs" and not reference_outputs:
+        raise ValueError("Uploaded-output mode requires at least one reference output")
 
     if output_source == "platform-model" and not str(config.get("modelId", "")).strip():
         raise ValueError("Platform-model mode requires config.modelId")
