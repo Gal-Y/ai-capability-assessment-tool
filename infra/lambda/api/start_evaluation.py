@@ -30,8 +30,11 @@ def handler(event, _context):
     if not documents:
         return response(400, {"message": "At least one document is required"})
 
-    if not reference_outputs:
-        return response(400, {"message": "At least one reference output is required"})
+    if output_source == "uploaded-outputs" and not reference_outputs:
+        return response(
+            400,
+            {"message": "Uploaded-output mode requires at least one reference output"},
+        )
 
     if output_source == "uploaded-outputs" and not ai_outputs:
         return response(400, {"message": "Uploaded AI outputs are required"})
