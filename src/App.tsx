@@ -11,7 +11,6 @@ import {
   Cpu,
   Database,
   Download,
-  Eye,
   FileCheck2,
   FileJson,
   FileText,
@@ -159,6 +158,9 @@ const rulePresets: Array<{ id: RuleId; label: string; hint: string }> = [
   { id: "prompt_injection_resistance", label: "Prompt security", hint: "Injected content ignored" },
   { id: "operational_latency", label: "Operational fit", hint: "Practical processing time" },
 ];
+
+const recommendedRulePresets = rulePresets.slice(0, 4);
+const additionalRulePresets = rulePresets.slice(4);
 
 const demoCandidatePreview = `{
   "resourceType": "Bundle",
@@ -456,6 +458,27 @@ const decisionTone: Record<Decision, string> = {
   "Not Ready": "bad",
 };
 
+const decisionPresentation: Record<
+  Decision,
+  { heading: string; summary: string; Icon: typeof CircleCheck }
+> = {
+  Ready: {
+    heading: "Ready for controlled review",
+    summary: "No blocking issues were found. Continue with clinical and governance review.",
+    Icon: CircleCheck,
+  },
+  Conditional: {
+    heading: "Review before ingestion",
+    summary: "Resolve the highlighted items before sending this bundle downstream.",
+    Icon: AlertTriangle,
+  },
+  "Not Ready": {
+    heading: "Do not ingest yet",
+    summary: "Blocking issues must be resolved before this output moves to clinical review.",
+    Icon: XCircle,
+  },
+};
+
 const statusTone = (value: string) => {
   const key = value.toLowerCase();
   if (key === "ready" || key === "completed" || key === "succeeded") return "good";
@@ -481,56 +504,16 @@ const SeverityBadge = ({ severity }: { severity: Severity }) => {
   );
 };
 
-const meterTone = (value: number) => (value >= 92 ? "good" : value >= 85 ? "warn" : "bad");
-
-const Meter = ({ label, value }: { label: string; value: number }) => (
-  <div className="meter">
-    <div className="meter-head">
-      <span>{label}</span>
-      <strong>{score(value)}</strong>
-    </div>
-    <div className={`meter-track tone-${meterTone(value)}`} aria-hidden="true">
-      <span style={{ width: `${Math.min(Math.max(value, 0), 100)}%` }} />
-    </div>
-  </div>
-);
-
-const ScoreRing = ({ value, decision }: { value: number; decision: Decision }) => {
-  const radius = 52;
-  const circumference = 2 * Math.PI * radius;
-  const clamped = Math.min(Math.max(value, 0), 100);
-  return (
-    <div className={`score-ring tone-${decisionTone[decision]}`} role="img" aria-label={`Readiness ${score(value)} out of 100`}>
-      <svg viewBox="0 0 128 128">
-        <circle className="ring-track" cx="64" cy="64" r={radius} />
-        <circle
-          className="ring-fill"
-          cx="64"
-          cy="64"
-          r={radius}
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - clamped / 100)}
-        />
-      </svg>
-      <div className="score-ring-value">
-        <strong>{score(value)}</strong>
-        <span>/ 100</span>
-      </div>
-    </div>
-  );
-};
-
 const dimensionMeta: Array<{
   key: keyof ReadinessDimensions;
   label: string;
-  shortLabel: string;
   Icon: typeof CircleCheck;
 }> = [
-  { key: "taskReliability", label: "Task reliability", shortLabel: "Reliable", Icon: FileCheck2 },
-  { key: "privacyContainment", label: "Privacy containment", shortLabel: "Private", Icon: ShieldCheck },
-  { key: "securityRobustness", label: "Security robustness", shortLabel: "Secure", Icon: Zap },
-  { key: "constraintPerformance", label: "Constraint performance", shortLabel: "Operational", Icon: Activity },
-  { key: "valueUtility", label: "Value and utility", shortLabel: "Useful", Icon: CheckCircle2 },
+  { key: "taskReliability", label: "Task reliability", Icon: FileCheck2 },
+  { key: "privacyContainment", label: "Privacy containment", Icon: ShieldCheck },
+  { key: "securityRobustness", label: "Security robustness", Icon: Zap },
+  { key: "constraintPerformance", label: "Constraint performance", Icon: Activity },
+  { key: "valueUtility", label: "Value and utility", Icon: CheckCircle2 },
 ];
 
 const dimensionThresholds: ReadinessDimensions = {
@@ -548,30 +531,31 @@ const dimensionTone = (key: keyof ReadinessDimensions, value: number) => {
   return "bad";
 };
 
-const DimensionCard = ({
+const DimensionRow = ({
   dimensionKey,
   value,
-  reason,
 }: {
   dimensionKey: keyof ReadinessDimensions;
   value: number;
-  reason?: string;
 }) => {
   const meta = dimensionMeta.find((item) => item.key === dimensionKey) ?? dimensionMeta[0];
   const tone = dimensionTone(dimensionKey, value);
   const Icon = meta.Icon;
+  const state = tone === "good" ? "Meets gate" : tone === "warn" ? "Review" : "Below gate";
 
   return (
-    <div className={`dimension-card tone-${tone}`}>
-      <div className="dimension-card-head">
+    <div className={`dimension-row tone-${tone}`}>
+      <div className="dimension-row-main">
         <span className="dimension-icon"><Icon aria-hidden="true" /></span>
-        <strong>{score(value)}</strong>
+        <span>
+          <strong>{meta.label}</strong>
+          <small>{state}</small>
+        </span>
       </div>
-      <span>{meta.label}</span>
+      <strong className="dimension-score">{score(value)}</strong>
       <div className="dimension-track" aria-hidden="true">
         <span style={{ width: `${Math.min(Math.max(value, 0), 100)}%` }} />
       </div>
-      <small>{reason ?? `Gate ${dimensionThresholds[dimensionKey]}`}</small>
     </div>
   );
 };
@@ -1688,6 +1672,11 @@ function App() {
     return { passes, review, blockers };
   }, [selectedEvaluation]);
 
+  const selectedDecisionPresentation = decisionPresentation[selectedEvaluation.decision];
+  const SelectedDecisionIcon = selectedDecisionPresentation.Icon;
+  const visibleIssues = selectedEvaluation.issues.slice(0, 3);
+  const remainingIssues = selectedEvaluation.issues.slice(3);
+
   const overviewStats = useMemo(() => {
     const completed = allRuns.filter((evaluation) => evaluation.status !== "RUNNING").length;
     const average =
@@ -2009,7 +1998,15 @@ function App() {
           </div>
         </aside>
 
-        <main className={`workspace ${view === "capability" ? "workspace-capability" : ""}`}>
+        <main
+          className={`workspace ${
+            view === "capability"
+              ? "workspace-capability"
+              : view === "results"
+                ? "workspace-results"
+                : ""
+          }`}
+        >
           {view === "capability" ? (
             <CapabilityOverviewPage
               inputs={capabilityInputs}
@@ -2036,12 +2033,12 @@ function App() {
           ) : view === "documentation" ? (
             <DocumentationPage onCreate={() => setView("create")} onData={() => setView("data")} />
           ) : view === "create" ? (
-            <section className="plane">
+            <section className="plane create-plane">
               <div className="plane-head">
                 <div>
                   <span className="eyebrow">Evaluation builder</span>
                   <h1>Assess a clinical AI output</h1>
-                  <p>CDA and companion evidence become one case against a reference FHIR Bundle.</p>
+                  <p>Choose the output, add the evidence, then run the readiness checks.</p>
                 </div>
                 <span className="scope-chip"><ShieldCheck aria-hidden="true" /> Pre-ingestion gate</span>
               </div>
@@ -2055,19 +2052,14 @@ function App() {
                     <p>CDA + PDF · reference FHIR R4 · policy · controlled candidate</p>
                   </div>
                 </div>
-                <div className="scenario-control" role="group" aria-label="Sample outcome">
-                  {(["ready", "conditional", "blocked"] as DemoScenario[]).map((scenario) => (
-                    <button
-                      className={demoScenario === scenario ? `active scenario-${scenario}` : ""}
-                      type="button"
-                      aria-pressed={demoScenario === scenario}
-                      onClick={() => setDemoScenario(scenario)}
-                      key={scenario}
-                    >
-                      {scenario === "ready" ? "Ready" : scenario === "conditional" ? "Review" : "Blocked"}
-                    </button>
-                  ))}
-                </div>
+                <label className="scenario-select">
+                  <span>Sample outcome</span>
+                  <select value={demoScenario} onChange={(event) => setDemoScenario(event.target.value as DemoScenario)}>
+                    <option value="ready">Ready</option>
+                    <option value="conditional">Review</option>
+                    <option value="blocked">Blocked</option>
+                  </select>
+                </label>
                 <button className="sample-action" type="button" disabled={isLoadingDemo} onClick={() => void loadSample()}>
                   {isLoadingDemo ? "Loading…" : "Load dataset"}
                   <ArrowRight aria-hidden="true" />
@@ -2077,7 +2069,7 @@ function App() {
               <div className="card">
                 <div className="section-heading numbered-heading">
                   <span>01</span>
-                  <div><h2 className="card-title">Candidate source</h2><small>Evaluate existing FHIR or generate a candidate.</small></div>
+                  <div><h2 className="card-title">Choose output source</h2><small>How should Galen get the FHIR candidate?</small></div>
                 </div>
                 <div className="mode-cards" role="radiogroup" aria-label="Output source">
                   <button
@@ -2087,9 +2079,11 @@ function App() {
                     aria-checked={outputSource === "uploaded-outputs"}
                     onClick={() => setOutputSource("uploaded-outputs")}
                   >
-                    <FileText aria-hidden="true" />
-                    <strong>Uploaded output</strong>
-                    <span>Score candidate FHIR your pipeline already produced.</span>
+                    <span className="mode-radio" aria-hidden="true" />
+                    <span className="mode-card-copy">
+                      <strong>Uploaded output</strong>
+                      <span>Score FHIR your pipeline already produced.</span>
+                    </span>
                   </button>
                   <button
                     className={outputSource === "platform-model" ? "mode-card active" : "mode-card"}
@@ -2098,9 +2092,11 @@ function App() {
                     aria-checked={outputSource === "platform-model"}
                     onClick={() => setOutputSource("platform-model")}
                   >
-                    <Cpu aria-hidden="true" />
-                    <strong>Platform model</strong>
-                    <span>Generate a candidate with the selected model, then score it.</span>
+                    <span className="mode-radio" aria-hidden="true" />
+                    <span className="mode-card-copy">
+                      <strong>Platform model</strong>
+                      <span>Generate FHIR with the selected model, then score it.</span>
+                    </span>
                   </button>
                 </div>
               </div>
@@ -2108,11 +2104,11 @@ function App() {
               <div className="card">
                 <div className="section-heading numbered-heading">
                   <span>02</span>
-                  <div><h2 className="card-title">Evidence bundle</h2><small>All source files are evaluated together as one clinical case.</small></div>
+                  <div><h2 className="card-title">Add evidence</h2><small>Required files are marked. Keep related sources together as one case.</small></div>
                 </div>
                 <div className="file-grid">
                   <FileField
-                    label="HL7 CDA / PDF"
+                    label="Source documents"
                     accept=".pdf,.xml,.cda,.ccda,.txt,.md,.json"
                     files={uploads.clinicalBundle}
                     hint="CDA, C-CDA, XML, PDF · required"
@@ -2138,29 +2134,32 @@ function App() {
                       setUploads((current) => ({ ...current, governancePolicies: files }))
                     }
                   />
-                  <FileField
-                    label="Candidate output"
-                    accept=".json,.txt,.md,.csv"
-                    files={uploads.candidateOutputs}
-                    hint={
-                      outputSource === "uploaded-outputs"
-                        ? "Generated JSON · required"
-                        : "Generated JSON · not needed for platform model"
-                    }
-                    onChange={(files) =>
-                      setUploads((current) => ({ ...current, candidateOutputs: files }))
-                    }
-                  />
+                  {outputSource === "uploaded-outputs" ? (
+                    <FileField
+                      label="Candidate FHIR"
+                      accept=".json,.txt,.md,.csv"
+                      files={uploads.candidateOutputs}
+                      hint="Generated JSON · required"
+                      onChange={(files) =>
+                        setUploads((current) => ({ ...current, candidateOutputs: files }))
+                      }
+                    />
+                  ) : (
+                    <div className="file-note">
+                      <span className="file-icon"><Cpu aria-hidden="true" /></span>
+                      <span><strong>Candidate FHIR</strong><small>Generated by the platform model after you run.</small></span>
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="card">
                 <div className="section-heading numbered-heading">
                   <span>03</span>
-                  <div><h2 className="card-title">Readiness controls</h2><small>Rules become deterministic and evaluator checks.</small></div>
+                  <div><h2 className="card-title">Choose checks</h2><small>Recommended checks are selected. Add the optional checks if needed.</small></div>
                 </div>
                 <div className="rule-grid">
-                  {rulePresets.map((rule) => {
+                  {recommendedRulePresets.map((rule) => {
                     const active = selectedRules.includes(rule.id);
                     return (
                       <button
@@ -2181,22 +2180,43 @@ function App() {
                     );
                   })}
                 </div>
+                <details className="advanced-rules">
+                  <summary>
+                    <span>Advanced checks</span>
+                    <small>{additionalRulePresets.filter((rule) => selectedRules.includes(rule.id)).length} of {additionalRulePresets.length} selected</small>
+                    <ChevronRight aria-hidden="true" />
+                  </summary>
+                  <div className="rule-grid">
+                    {additionalRulePresets.map((rule) => {
+                      const active = selectedRules.includes(rule.id);
+                      return (
+                        <button
+                          key={rule.id}
+                          type="button"
+                          className={active ? "rule-chip active" : "rule-chip"}
+                          aria-pressed={active}
+                          onClick={() => toggleRule(rule.id)}
+                        >
+                          <span className="rule-check" aria-hidden="true">
+                            <CircleCheck />
+                          </span>
+                          <span>
+                            <strong>{rule.label}</strong>
+                            <small>{rule.hint}</small>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </details>
               </div>
 
               <div className="card create-footer">
-                <label>
-                  <span>Model</span>
-                  <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
-                    <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
-                    <option value="gpt-5.4">GPT-5.4</option>
-                    <option value="gpt-4o">GPT-4o</option>
-                    <option value="gpt-4o-mini">GPT-4o Mini</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Scoring note</span>
-                  <input value={notes} onChange={(event) => setNotes(event.target.value)} />
-                </label>
+                <div className="run-summary">
+                  <span className="eyebrow">Ready to run?</span>
+                  <h2>Start the readiness evaluation</h2>
+                  <p>Galen will compare the candidate against the reference FHIR and selected checks.</p>
+                </div>
                 <button
                   className="primary-action"
                   disabled={isSubmitting}
@@ -2206,6 +2226,28 @@ function App() {
                   <Play aria-hidden="true" />
                   {isSubmitting ? "Uploading and starting…" : "Run readiness evaluation"}
                 </button>
+                <details className="advanced-settings">
+                  <summary>
+                    <span>Advanced settings</span>
+                    <small>Model and scoring note</small>
+                    <ChevronRight aria-hidden="true" />
+                  </summary>
+                  <div className="settings-fields">
+                    <label>
+                      <span>Model</span>
+                      <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
+                        <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                        <option value="gpt-5.4">GPT-5.4</option>
+                        <option value="gpt-4o">GPT-4o</option>
+                        <option value="gpt-4o-mini">GPT-4o Mini</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Scoring note</span>
+                      <input value={notes} onChange={(event) => setNotes(event.target.value)} />
+                    </label>
+                  </div>
+                </details>
               </div>
             </section>
           ) : view === "settings" ? (
@@ -2465,13 +2507,13 @@ function App() {
               </div>
             </section>
           ) : (
-            <section className="plane">
+            <section className="plane results-plane">
               <div className="plane-head">
                 <div>
                   <span className="eyebrow">{selectedEvaluation.capability}</span>
-                  <h1>Results</h1>
+                  <h1>Readiness report</h1>
                   <p>
-                    Evaluated {formatDate(selectedEvaluation.createdAt)} ·{" "}
+                    {formatDate(selectedEvaluation.createdAt)} ·{" "}
                     {selectedEvaluation.outputSource === "platform-model"
                       ? "platform model"
                       : "uploaded output"}
@@ -2493,187 +2535,192 @@ function App() {
                 </div>
               ) : null}
 
-              <div className="dimension-grid" aria-label="Deployment readiness dimensions">
-                {dimensionMeta.map((dimension) => (
-                  <DimensionCard
-                    key={dimension.key}
-                    dimensionKey={dimension.key}
-                    value={selectedEvaluation.dimensions[dimension.key]}
-                    reason={selectedEvaluation.dimensionReasons[dimension.key]?.[0]}
-                  />
-                ))}
-              </div>
-
-              <div className="results-grid">
-                <div className="results-side">
-                  <div className="card readiness-card">
-                    <ScoreRing
-                      value={selectedEvaluation.readinessScore}
-                      decision={selectedEvaluation.decision}
+              <section
+                className={`result-decision tone-${decisionTone[selectedEvaluation.decision]}`}
+                aria-labelledby="result-decision-title"
+              >
+                <div className="result-decision-copy">
+                  <div className="result-decision-label">
+                    <span className="result-decision-icon"><SelectedDecisionIcon aria-hidden="true" /></span>
+                    <span>Deployment decision</span>
+                    <StatusPill
+                      value={selectedEvaluation.decision}
+                      tone={decisionTone[selectedEvaluation.decision]}
                     />
-                    <div className="readiness-copy">
-                      <span className="stat-label">Overall readiness</span>
-                      <StatusPill
-                        value={selectedEvaluation.decision}
-                        tone={decisionTone[selectedEvaluation.decision]}
-                      />
-                      <small>
-                        {selectedEvaluation.decision === "Ready"
-                          ? "Cleared for controlled ingestion review."
-                          : selectedEvaluation.decision === "Conditional"
-                            ? "Usable after the review items below are resolved."
-                            : "Blockers must be fixed before ingestion review."}
-                      </small>
-                    </div>
                   </div>
+                  <h2 id="result-decision-title">{selectedDecisionPresentation.heading}</h2>
+                  <p>{selectedDecisionPresentation.summary}</p>
+                  <button className="decision-action" type="button" onClick={() => setView("data")}>
+                    Review evidence <ArrowRight aria-hidden="true" />
+                  </button>
+                </div>
 
-                  <div className="card">
-                    <div className="section-heading compact-heading">
-                      <h2 className="card-title">Underlying checks</h2>
-                      <span className="evidence-label">Evidence</span>
-                    </div>
-                    <div className="meter-stack">
-                      <Meter label="Faithfulness" value={selectedEvaluation.metrics.faithfulness} />
-                      <Meter label="Coverage" value={selectedEvaluation.metrics.coverage} />
-                      <Meter label="Compliance" value={selectedEvaluation.metrics.compliance} />
-                      <Meter label="Privacy" value={selectedEvaluation.metrics.privacy} />
-                    </div>
-                    <div className="latency-row">
-                      <Timer aria-hidden="true" />
-                      <span>Latency</span>
-                      <strong>
-                        {selectedEvaluation.metrics.latency !== null
-                          ? `${score(selectedEvaluation.metrics.latency)}s avg`
-                          : "-"}
-                      </strong>
-                    </div>
-                  </div>
+                <div
+                  className="result-score"
+                  role="img"
+                  aria-label={`Readiness score ${score(selectedEvaluation.readinessScore)} out of 100`}
+                >
+                  <span>Readiness score</span>
+                  <strong>{score(selectedEvaluation.readinessScore)}</strong>
+                  <small>out of 100</small>
+                </div>
 
-                  <div className="card meta-card">
-                    <div className="section-heading compact-heading">
-                      <h2 className="card-title">Run details</h2>
-                      <button className="icon-text-action" type="button" onClick={exportEvaluation}>
-                        <Download aria-hidden="true" /> Export
+                <dl className="result-facts">
+                  <div><dt>Blockers</dt><dd>{summary.blockers}</dd></div>
+                  <div><dt>Review cases</dt><dd>{summary.review}</dd></div>
+                  <div><dt>PHI containment</dt><dd>{score(selectedEvaluation.dimensions.privacyContainment)}</dd></div>
+                </dl>
+              </section>
+
+              <div className="result-body">
+                <div className="result-main-column">
+                  <section className="result-section" aria-labelledby="attention-title">
+                    <div className="result-section-head">
+                      <div>
+                        <span className="eyebrow">Priority</span>
+                        <h2 id="attention-title">What needs attention</h2>
+                      </div>
+                      <span className="result-count">{selectedEvaluation.issues.length}</span>
+                    </div>
+                    {selectedEvaluation.issues.length > 0 ? (
+                      <>
+                        <ul className="attention-list">
+                          {visibleIssues.map((item) => (
+                            <li key={item}>
+                              <span><AlertTriangle aria-hidden="true" /></span>
+                              <p>{item}</p>
+                            </li>
+                          ))}
+                        </ul>
+                        {remainingIssues.length > 0 ? (
+                          <details className="more-issues">
+                            <summary>
+                              <span>Show {remainingIssues.length} more</span>
+                              <ChevronRight aria-hidden="true" />
+                            </summary>
+                            <ul className="attention-list">
+                              {remainingIssues.map((item) => (
+                                <li key={item}>
+                                  <span><AlertTriangle aria-hidden="true" /></span>
+                                  <p>{item}</p>
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        ) : null}
+                      </>
+                    ) : (
+                      <div className="result-clear-state">
+                        <CircleCheck aria-hidden="true" />
+                        <span>No issues require attention.</span>
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="result-section" aria-labelledby="case-review-title">
+                    <div className="result-section-head">
+                      <div>
+                        <span className="eyebrow">Evidence</span>
+                        <h2 id="case-review-title">Case review</h2>
+                      </div>
+                      <button type="button" className="icon-text-action" onClick={() => setView("data")}>
+                        Full evidence <ArrowRight aria-hidden="true" />
                       </button>
                     </div>
-                    <dl>
-                      <div>
-                        <dt><Cpu aria-hidden="true" /> Candidate</dt>
-                        <dd>{selectedEvaluation.modelId}</dd>
-                      </div>
-                      <div>
-                        <dt><ShieldCheck aria-hidden="true" /> Evaluator</dt>
-                        <dd>{selectedEvaluation.evaluatorModel}</dd>
-                      </div>
+                    <div className="result-finding-list">
+                      {selectedEvaluation.cases.length > 0 ? (
+                        selectedEvaluation.cases.map((caseItem) => (
+                          <button
+                            className="result-finding-row"
+                            type="button"
+                            onClick={() => { setSelectedCaseId(caseItem.id); setEvidenceTab("summary"); }}
+                            key={caseItem.id}
+                          >
+                            <SeverityBadge severity={caseItem.severity} />
+                            <span className="result-finding-copy">
+                              <strong>{caseItem.target}</strong>
+                              <span>{caseItem.finding}</span>
+                              <small>{caseItem.id} · {caseItem.source}</small>
+                            </span>
+                            <ChevronRight aria-hidden="true" />
+                          </button>
+                        ))
+                      ) : (
+                        <div className="result-clear-state">
+                          <CircleCheck aria-hidden="true" />
+                          <span>No case findings were recorded.</span>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+
+                  <details className="result-disclosure result-success">
+                    <summary>
+                      <span><CircleCheck aria-hidden="true" /><strong>What passed</strong></span>
+                      <small>{selectedEvaluation.strengths.length} strengths</small>
+                      <ChevronRight aria-hidden="true" />
+                    </summary>
+                    <ul className="result-strength-list">
+                      {selectedEvaluation.strengths.length > 0 ? (
+                        selectedEvaluation.strengths.map((item) => <li key={item}>{item}</li>)
+                      ) : (
+                        <li>No strengths recorded yet.</li>
+                      )}
+                    </ul>
+                  </details>
+                </div>
+
+                <aside className="result-sidebar" aria-label="Readiness details">
+                  <section className="result-sidebar-section">
+                    <span className="eyebrow">Readiness</span>
+                    <h2>Dimension scores</h2>
+                    <div className="dimension-list" aria-label="Deployment readiness dimensions">
+                      {dimensionMeta.map((dimension) => (
+                        <DimensionRow
+                          key={dimension.key}
+                          dimensionKey={dimension.key}
+                          value={selectedEvaluation.dimensions[dimension.key]}
+                        />
+                      ))}
+                    </div>
+                  </section>
+
+                  <details className="result-sidebar-disclosure">
+                    <summary>
+                      <span>Technical scores</span>
+                      <ChevronRight aria-hidden="true" />
+                    </summary>
+                    <dl className="result-detail-list">
+                      <div><dt>Faithfulness</dt><dd>{score(selectedEvaluation.metrics.faithfulness)}</dd></div>
+                      <div><dt>Coverage</dt><dd>{score(selectedEvaluation.metrics.coverage)}</dd></div>
+                      <div><dt>Compliance</dt><dd>{score(selectedEvaluation.metrics.compliance)}</dd></div>
+                      <div><dt>Privacy</dt><dd>{score(selectedEvaluation.metrics.privacy)}</dd></div>
+                      <div><dt>Latency</dt><dd>{selectedEvaluation.metrics.latency !== null ? `${score(selectedEvaluation.metrics.latency)}s` : "-"}</dd></div>
+                    </dl>
+                  </details>
+
+                  <details className="result-sidebar-disclosure">
+                    <summary>
+                      <span>Run details</span>
+                      <ChevronRight aria-hidden="true" />
+                    </summary>
+                    <dl className="result-detail-list">
+                      <div><dt><Cpu aria-hidden="true" /> Candidate</dt><dd>{selectedEvaluation.modelId}</dd></div>
+                      <div><dt><ShieldCheck aria-hidden="true" /> Evaluator</dt><dd>{selectedEvaluation.evaluatorModel}</dd></div>
                       <div>
                         <dt><FileText aria-hidden="true" /> Inputs</dt>
-                        <dd>
-                          {selectedEvaluation.documents.length} docs ·{" "}
-                          {selectedEvaluation.referenceOutputs.length} refs ·{" "}
-                          {selectedEvaluation.policyFiles.length} policies
-                        </dd>
+                        <dd>{selectedEvaluation.documents.length} docs · {selectedEvaluation.referenceOutputs.length} refs</dd>
                       </div>
                       <div>
                         <dt><Timer aria-hidden="true" /> Processing</dt>
-                        <dd>
-                          {selectedEvaluation.processingSeconds !== null
-                            ? `${score(selectedEvaluation.processingSeconds)}s`
-                            : selectedEvaluation.stage}
-                        </dd>
+                        <dd>{selectedEvaluation.processingSeconds !== null ? `${score(selectedEvaluation.processingSeconds)}s` : selectedEvaluation.stage}</dd>
                       </div>
                     </dl>
-                  </div>
-                </div>
-
-                <div className="results-main">
-                  <div className="triage-strip">
-                    <div className="card triage tone-good">
-                      <CircleCheck aria-hidden="true" />
-                      <div>
-                        <strong>{summary.passes}</strong>
-                        <span>Pass</span>
-                      </div>
-                    </div>
-                    <div className="card triage tone-warn">
-                      <AlertTriangle aria-hidden="true" />
-                      <div>
-                        <strong>{summary.review}</strong>
-                        <span>Review</span>
-                      </div>
-                    </div>
-                    <div className="card triage tone-bad">
-                      <XCircle aria-hidden="true" />
-                      <div>
-                        <strong>{summary.blockers}</strong>
-                        <span>Blockers</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="card">
-                    <div className="section-heading">
-                      <h2 className="card-title">Case findings</h2>
-                      <button type="button" className="ghost-action" onClick={() => setView("data")}>
-                        Full evidence
-                      </button>
-                    </div>
-                    <div className="finding-list">
-                      {selectedEvaluation.cases.map((caseItem) => (
-                        <button
-                          className="finding-row"
-                          type="button"
-                          onClick={() => { setSelectedCaseId(caseItem.id); setEvidenceTab("summary"); }}
-                          key={caseItem.id}
-                        >
-                          <SeverityBadge severity={caseItem.severity} />
-                          <div className="finding-body">
-                            <strong>
-                              {caseItem.target}
-                              <em>{caseItem.id}</em>
-                            </strong>
-                            <span>{caseItem.finding}</span>
-                          </div>
-                          <div className="finding-metrics" aria-label="Case metrics">
-                            <span>F {score(caseItem.metrics.faithfulness)}</span>
-                            <span>C {score(caseItem.metrics.coverage)}</span>
-                            <span>P {score(caseItem.metrics.privacy)}</span>
-                            <span>{compactMs(caseItem.metrics.latency)}</span>
-                            <Eye aria-hidden="true" />
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="two-up">
-                    <div className="card note-card tone-good">
-                      <h2 className="card-title">
-                        <CircleCheck aria-hidden="true" />
-                        Strengths
-                      </h2>
-                      <ul>
-                        {selectedEvaluation.strengths.length > 0 ? (
-                          selectedEvaluation.strengths.map((item) => <li key={item}>{item}</li>)
-                        ) : (
-                          <li className="empty">No strengths recorded yet.</li>
-                        )}
-                      </ul>
-                    </div>
-                    <div className="card note-card tone-warn">
-                      <h2 className="card-title">
-                        <AlertTriangle aria-hidden="true" />
-                        Issues to resolve
-                      </h2>
-                      <ul>
-                        {selectedEvaluation.issues.length > 0 ? (
-                          selectedEvaluation.issues.map((item) => <li key={item}>{item}</li>)
-                        ) : (
-                          <li className="empty">No issues recorded yet.</li>
-                        )}
-                      </ul>
-                    </div>
-                  </div>
-                </div>
+                    <button className="result-export" type="button" onClick={exportEvaluation}>
+                      <Download aria-hidden="true" /> Export report
+                    </button>
+                  </details>
+                </aside>
               </div>
             </section>
           )}
