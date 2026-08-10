@@ -47,7 +47,10 @@ import {
   buildCapabilityMappings,
   parseCdaDocument,
   parseFhirCandidate,
+  parsePdfDocument,
+  type CapabilityMapping,
   type CdaOverview,
+  type PdfOverview,
 } from "./lib/capability";
 
 type OutputSource = "platform-model" | "uploaded-outputs";
@@ -1001,6 +1004,40 @@ const FileField = ({
   </label>
 );
 
+const escapePattern = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const HighlightedLine = ({ text, terms }: { text: string; terms: string[] }) => {
+  const usefulTerms = Array.from(new Set(terms.filter((term) => term.trim().length > 2)))
+    .sort((left, right) => right.length - left.length);
+  if (usefulTerms.length === 0) return <>{text}</>;
+
+  const expression = new RegExp(`(${usefulTerms.map(escapePattern).join("|")})`, "gi");
+  const normalizedTerms = new Set(usefulTerms.map((term) => term.toLowerCase()));
+  return (
+    <>
+      {text.split(expression).map((part, index) =>
+        normalizedTerms.has(part.toLowerCase()) ? <mark key={`${part}-${index}`}>{part}</mark> : part,
+      )}
+    </>
+  );
+};
+
+const JsonTrace = ({ value, mapping }: { value: unknown; mapping: CapabilityMapping | null }) => {
+  const field = mapping?.targetPath
+    .split(".")
+    .slice(-1)[0]
+    ?.replace(/\[\d+\]/g, "")
+    .trim();
+  const lines = JSON.stringify(value, null, 2).split("\n");
+
+  return (
+    <pre className="trace-json"><code>{lines.map((line, index) => {
+      const active = Boolean(field && line.includes(`"${field}"`));
+      return <span className={active ? "highlighted" : ""} key={`${line}-${index}`}>{line}{"\n"}</span>;
+    })}</code></pre>
+  );
+};
+
 const CapabilityOverviewPage = ({
   inputs,
   evaluation,
@@ -1029,9 +1066,11 @@ const CapabilityOverviewPage = ({
   const [sourceView, setSourceView] = useState<"cda" | "pdf">("cda");
   const [cdaView, setCdaView] = useState<"structure" | "raw">("structure");
   const [cdaOverview, setCdaOverview] = useState<CdaOverview | null>(null);
+  const [pdfOverview, setPdfOverview] = useState<PdfOverview | null>(null);
   const [cdaError, setCdaError] = useState<string | null>(null);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
   const [selectedResourceKey, setSelectedResourceKey] = useState<string | null>(null);
+  const [selectedMappingId, setSelectedMappingId] = useState<string | null>(null);
 
   const cdaFile = inputs.cda[0] ?? null;
   const pdfFile = inputs.pdf[0] ?? null;
@@ -1043,7 +1082,6 @@ const CapabilityOverviewPage = ({
       setCdaError(null);
       return;
     }
-
     void parseCdaDocument(cdaFile)
       .then((overview) => {
         if (!cancelled) {
@@ -1057,32 +1095,48 @@ const CapabilityOverviewPage = ({
           setCdaError(String(error));
         }
       });
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [cdaFile]);
 
   useEffect(() => {
+    let cancelled = false;
     if (!pdfFile) {
-      setPdfUrl(null);
+      setPdfOverview(null);
+      setPdfError(null);
       return;
     }
-    const url = URL.createObjectURL(pdfFile);
-    setPdfUrl(url);
-    return () => URL.revokeObjectURL(url);
+    void parsePdfDocument(pdfFile)
+      .then((overview) => {
+        if (!cancelled) {
+          setPdfOverview(overview);
+          setPdfError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPdfOverview(null);
+          setPdfError(String(error));
+        }
+      });
+    return () => { cancelled = true; };
   }, [pdfFile]);
 
   const candidateText = evaluation?.cases[0]?.candidateText ?? "";
   const parsedCandidate = useMemo(() => parseFhirCandidate(candidateText), [candidateText]);
   const mappings = useMemo(
-    () => buildCapabilityMappings(cdaOverview, parsedCandidate.resources, Boolean(pdfFile)),
-    [cdaOverview, parsedCandidate.resources, pdfFile],
+    () => buildCapabilityMappings(cdaOverview, parsedCandidate.resources, pdfOverview),
+    [cdaOverview, parsedCandidate.resources, pdfOverview],
   );
+  const sourceMappings = useMemo(
+    () => mappings.filter((mapping) => mapping.source === sourceView.toUpperCase()),
+    [mappings, sourceView],
+  );
+  const activeMapping = mappings.find((mapping) => mapping.id === selectedMappingId) ?? null;
 
   useEffect(() => {
     if (parsedCandidate.resources.length === 0) {
       setSelectedResourceKey(null);
+      setSelectedMappingId(null);
       return;
     }
     setSelectedResourceKey((current) =>
@@ -1092,19 +1146,54 @@ const CapabilityOverviewPage = ({
     );
   }, [parsedCandidate.resources]);
 
+  useEffect(() => {
+    setSelectedMappingId((current) => {
+      if (current && sourceMappings.some((mapping) => mapping.id === current)) return current;
+      const selectedResource = parsedCandidate.resources.find((resource) => resource.key === selectedResourceKey);
+      const target = selectedResource ? `${selectedResource.resourceType}/${selectedResource.id}` : null;
+      return sourceMappings.find((mapping) => mapping.targetResource === target)?.id ?? sourceMappings[0]?.id ?? null;
+    });
+  }, [parsedCandidate.resources, selectedResourceKey, sourceMappings]);
+
   const selectedResource =
     parsedCandidate.resources.find((resource) => resource.key === selectedResourceKey) ?? null;
   const isRunning = evaluation?.status === "RUNNING";
   const isComplete = evaluation?.status === "COMPLETED";
-  const sourceReady = Boolean(cdaFile && pdfFile && cdaOverview && !cdaError);
+  const sourceReady = Boolean(cdaFile && pdfFile && cdaOverview && pdfOverview && !cdaError && !pdfError);
   const mappedCount = mappings.filter((mapping) => mapping.status === "Mapped").length;
 
-  const selectMappingResource = (targetResource: string) => {
-    const [resourceType, id] = targetResource.split("/");
+  const selectMapping = (mapping: CapabilityMapping) => {
+    setSelectedMappingId(mapping.id);
+    setSourceView(mapping.source.toLowerCase() as "cda" | "pdf");
+    const [resourceType, id] = mapping.targetResource.split("/");
     const resource = parsedCandidate.resources.find(
       (item) => item.resourceType === resourceType && item.id === id,
     );
     if (resource) setSelectedResourceKey(resource.key);
+  };
+
+  const selectResource = (resourceKey: string) => {
+    setSelectedResourceKey(resourceKey);
+    const resource = parsedCandidate.resources.find((item) => item.key === resourceKey);
+    if (!resource) return;
+    const target = `${resource.resourceType}/${resource.id}`;
+    const mapping = sourceMappings.find((item) => item.targetResource === target) ??
+      mappings.find((item) => item.targetResource === target);
+    if (mapping) selectMapping(mapping);
+  };
+
+  const lineMatchesActiveMapping = (line: string) =>
+    Boolean(activeMapping?.matchTerms.some(
+      (term) => term.trim().length > 2 && line.toLowerCase().includes(term.toLowerCase()),
+    ));
+
+  const selectPdfLine = (line: string) => {
+    const mapping = sourceMappings.find((item) =>
+      item.matchTerms.some(
+        (term) => term.trim().length > 2 && line.toLowerCase().includes(term.toLowerCase()),
+      ),
+    );
+    if (mapping) selectMapping(mapping);
   };
 
   return (
@@ -1132,151 +1221,42 @@ const CapabilityOverviewPage = ({
         <div className="capability-stage-head">
           <div className="numbered-heading">
             <span>01</span>
-            <div>
-              <h2 id="capability-source-title">Source bundle</h2>
-              <small>CDA is the structured source; PDF is supporting clinical evidence.</small>
-            </div>
+            <div><h2 id="capability-source-title">Source bundle</h2><small>CDA is the structured source; PDF is supporting clinical evidence.</small></div>
           </div>
           <div className="sample-file-actions">
-            <a href="/demo/synthetic-pathology-cda.xml" download>
-              <Download aria-hidden="true" /> CDA sample
-            </a>
-            <a href="/demo/synthetic-pathology-report.pdf" download>
-              <Download aria-hidden="true" /> PDF sample
-            </a>
-            <button type="button" disabled={isLoadingSample} onClick={onLoadSample}>
-              <FlaskConical aria-hidden="true" />
-              {isLoadingSample ? "Loading…" : "Load both"}
-            </button>
+            <a href="/demo/synthetic-pathology-cda.xml" download><Download aria-hidden="true" /> CDA sample</a>
+            <a href="/demo/synthetic-pathology-report.pdf" download><Download aria-hidden="true" /> PDF sample</a>
+            <button type="button" disabled={isLoadingSample} onClick={onLoadSample}><FlaskConical aria-hidden="true" />{isLoadingSample ? "Loading…" : "Load both"}</button>
           </div>
         </div>
-
         <div className="capability-file-grid">
-          <FileField
-            label="HL7 CDA document"
-            accept=".xml,.cda,.ccda"
-            files={inputs.cda}
-            hint="ClinicalDocument XML · required"
-            onChange={(files) => onCdaChange(files.slice(0, 1))}
-          />
-          <FileField
-            label="Companion PDF report"
-            accept=".pdf"
-            files={inputs.pdf}
-            hint="Human-readable pathology report · required"
-            onChange={(files) => onPdfChange(files.slice(0, 1))}
-          />
+          <FileField label="HL7 CDA document" accept=".xml,.cda,.ccda" files={inputs.cda} hint="ClinicalDocument XML · required" onChange={(files) => onCdaChange(files.slice(0, 1))} />
+          <FileField label="Companion PDF report" accept=".pdf" files={inputs.pdf} hint="Human-readable pathology report · required" onChange={(files) => onPdfChange(files.slice(0, 1))} />
         </div>
-
-        {cdaFile || pdfFile ? (
-          <div className="source-inspector">
-            <div className="source-inspector-tabs" role="tablist" aria-label="Clinical source preview">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={sourceView === "cda"}
-                className={sourceView === "cda" ? "active" : ""}
-                onClick={() => setSourceView("cda")}
-              >
-                <FileJson aria-hidden="true" />
-                <span><strong>CDA</strong><small>{cdaFile?.name ?? "Not selected"}</small></span>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={sourceView === "pdf"}
-                className={sourceView === "pdf" ? "active" : ""}
-                onClick={() => setSourceView("pdf")}
-              >
-                <FileText aria-hidden="true" />
-                <span><strong>PDF</strong><small>{pdfFile?.name ?? "Not selected"}</small></span>
-              </button>
-            </div>
-
-            <div className="source-preview">
-              {sourceView === "cda" ? (
-                cdaError ? (
-                  <div className="source-empty"><AlertTriangle aria-hidden="true" /><strong>Could not read CDA</strong><span>{cdaError}</span></div>
-                ) : cdaOverview ? (
-                  <>
-                    <header className="source-preview-head">
-                      <div><span className="eyebrow">HL7 ClinicalDocument</span><h3>{cdaOverview.title}</h3><small>ID {cdaOverview.documentId}</small></div>
-                      <div className="compact-tabs" role="tablist" aria-label="CDA view">
-                        <button type="button" role="tab" aria-selected={cdaView === "structure"} className={cdaView === "structure" ? "active" : ""} onClick={() => setCdaView("structure")}>Structure</button>
-                        <button type="button" role="tab" aria-selected={cdaView === "raw"} className={cdaView === "raw" ? "active" : ""} onClick={() => setCdaView("raw")}>Raw XML</button>
-                      </div>
-                    </header>
-                    {cdaView === "structure" ? (
-                      <div className="cda-fact-list">
-                        {cdaOverview.facts.map((fact) => (
-                          <div key={fact.id}>
-                            <span className={`source-badge source-${fact.kind}`}>{fact.kind}</span>
-                            <span><strong>{fact.label}</strong><small>{fact.sourcePath}</small></span>
-                            <span><strong>{fact.value}</strong>{fact.code ? <small>{fact.system} {fact.code}</small> : null}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <pre className="source-code"><code>{cdaOverview.raw}</code></pre>
-                    )}
-                  </>
-                ) : (
-                  <div className="source-empty"><FileJson aria-hidden="true" /><strong>Select a CDA document</strong><span>The parsed clinical structure appears here.</span></div>
-                )
-              ) : pdfUrl ? (
-                <iframe className="pdf-preview" title="Companion pathology PDF" src={`${pdfUrl}#toolbar=1&navpanes=0`} />
-              ) : (
-                <div className="source-empty"><FileText aria-hidden="true" /><strong>Select a PDF report</strong><span>The original report appears here.</span></div>
-              )}
-            </div>
-          </div>
-        ) : null}
       </section>
 
       <section className="capability-stage" aria-labelledby="capability-generation-title">
         <div className="capability-stage-head">
           <div className="numbered-heading">
             <span>02</span>
-            <div>
-              <h2 id="capability-generation-title">Generate FHIR</h2>
-              <small>The model receives both files as one clinical case.</small>
-            </div>
+            <div><h2 id="capability-generation-title">Generate FHIR</h2><small>The model receives both files as one clinical case.</small></div>
           </div>
           <div className="generation-actions">
-            <label>
-              <span>Model</span>
-              <select value={modelId} onChange={(event) => onModelChange(event.target.value)}>
-                <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
-                <option value="gpt-5.4">GPT-5.4</option>
-              </select>
-            </label>
+            <label><span>Model</span><select value={modelId} onChange={(event) => onModelChange(event.target.value)}><option value="gpt-5.4-mini">GPT-5.4 Mini</option><option value="gpt-5.4">GPT-5.4</option></select></label>
             <button className="primary-action" type="button" disabled={!sourceReady || isStarting || isRunning} onClick={onGenerate}>
-              <Play aria-hidden="true" />
-              {isStarting ? "Uploading…" : isRunning ? "Generating…" : candidateText ? "Generate again" : "Generate FHIR"}
+              <Play aria-hidden="true" />{isStarting ? "Uploading…" : isRunning ? "Generating…" : candidateText ? "Generate again" : "Generate FHIR"}
             </button>
           </div>
         </div>
-
         {evaluation ? (
           <div className={`generation-status status-${evaluation.status.toLowerCase()}`}>
             <div>
               {isComplete ? <CheckCircle2 aria-hidden="true" /> : isRunning ? <Activity aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
-              <span>
-                <small>{evaluation.id}</small>
-                <strong>{isComplete ? "FHIR candidate generated" : isRunning ? evaluation.stage.replace(/_/g, " ") : evaluation.status}</strong>
-              </span>
+              <span><small>{evaluation.id}</small><strong>{isComplete ? "FHIR candidate generated" : isRunning ? evaluation.stage.replace(/_/g, " ") : evaluation.status}</strong></span>
             </div>
             {isRunning ? <WorkflowProgress stage={evaluation.stage} /> : isComplete ? (
-              <div className="generation-facts">
-                <span><strong>{parsedCandidate.resources.length}</strong> resources</span>
-                <span><strong>{evaluation.processingSeconds?.toFixed(1) ?? "-"}s</strong> processing</span>
-                <span><strong>{evaluation.decision}</strong> recorded</span>
-              </div>
-            ) : (
-              <small className="generation-error">
-                {evaluation.raw?.error ?? "The workflow did not complete. Review the run before retrying."}
-              </small>
-            )}
+              <div className="generation-facts"><span><strong>{parsedCandidate.resources.length}</strong> resources</span><span><strong>{evaluation.processingSeconds?.toFixed(1) ?? "-"}s</strong> processing</span><span><strong>{evaluation.decision}</strong> recorded</span></div>
+            ) : <small className="generation-error">{evaluation.raw?.error ?? "The workflow did not complete. Review the run before retrying."}</small>}
           </div>
         ) : (
           <div className="generation-empty"><Cpu aria-hidden="true" /><span><strong>Ready to generate</strong><small>Upload both source files to enable the model.</small></span></div>
@@ -1287,67 +1267,76 @@ const CapabilityOverviewPage = ({
         <div className="capability-stage-head">
           <div className="numbered-heading">
             <span>03</span>
-            <div>
-              <h2 id="capability-mapping-title">Resource mapping</h2>
-              <small>Trace generated FHIR fields back to CDA and PDF evidence.</small>
-            </div>
+            <div><h2 id="capability-mapping-title">Compare source and FHIR</h2><small>Select evidence or a resource to highlight both sides.</small></div>
           </div>
-          {isComplete && candidateText ? (
-            <button className="quiet-action" type="button" onClick={onOpenResults}>
-              <ShieldCheck aria-hidden="true" /> Open readiness report
-            </button>
-          ) : null}
+          {isComplete && candidateText ? <button className="quiet-action" type="button" onClick={onOpenResults}><ShieldCheck aria-hidden="true" /> Open readiness report</button> : null}
         </div>
 
-        {candidateText ? parsedCandidate.error ? (
+        {candidateText && parsedCandidate.error ? (
           <div className="mapping-empty"><AlertTriangle aria-hidden="true" /><strong>Generated output needs review</strong><span>{parsedCandidate.error}</span><pre><code>{parsedCandidate.formatted}</code></pre></div>
-        ) : (
-          <>
-            <div className="fhir-explorer">
-              <nav className="resource-list" aria-label="Generated FHIR resources">
-                <header><span>FHIR Bundle</span><strong>{parsedCandidate.resources.length}</strong></header>
-                {parsedCandidate.resources.map((resource) => (
-                  <button
-                    type="button"
-                    className={selectedResource?.key === resource.key ? "active" : ""}
-                    onClick={() => setSelectedResourceKey(resource.key)}
-                    key={resource.key}
-                  >
-                    <span className="resource-icon">{resource.resourceType.slice(0, 1)}</span>
-                    <span><strong>{resource.resourceType}</strong><small>{resource.label}</small></span>
-                    <ChevronRight aria-hidden="true" />
-                  </button>
-                ))}
-              </nav>
-              <div className="resource-json">
-                <header>
-                  <div><span className="eyebrow">Generated resource</span><h3>{selectedResource ? `${selectedResource.resourceType}/${selectedResource.id}` : "FHIR Bundle"}</h3></div>
-                  {selectedResource ? <StatusPill value={selectedResource.detail} tone="good" /> : null}
-                </header>
-                <pre><code>{JSON.stringify(selectedResource?.resource ?? parsedCandidate.bundle, null, 2)}</code></pre>
+        ) : cdaFile || pdfFile ? (
+          <div className="trace-workspace">
+            <div className="trace-toolbar">
+              <div className="source-switch" role="tablist" aria-label="Source evidence">
+                <button type="button" role="tab" aria-selected={sourceView === "cda"} className={sourceView === "cda" ? "active" : ""} onClick={() => setSourceView("cda")}><FileJson aria-hidden="true" /><span><strong>CDA</strong><small>{cdaFile?.name ?? "Not selected"}</small></span></button>
+                <button type="button" role="tab" aria-selected={sourceView === "pdf"} className={sourceView === "pdf" ? "active" : ""} onClick={() => setSourceView("pdf")}><FileText aria-hidden="true" /><span><strong>PDF</strong><small>{pdfFile?.name ?? "Not selected"}</small></span></button>
+              </div>
+              <div className="mapping-summary">
+                <div><span>Traces</span><strong>{mappings.length}</strong></div>
+                <div><span>Mapped</span><strong>{mappedCount}</strong></div>
+                <div><span>Review</span><strong>{mappings.length - mappedCount}</strong></div>
               </div>
             </div>
 
-            <div className="mapping-summary">
-              <div><span>Evidence traces</span><strong>{mappings.length}</strong></div>
-              <div><span>Mapped</span><strong>{mappedCount}</strong></div>
-              <div><span>Review</span><strong>{mappings.length - mappedCount}</strong></div>
-            </div>
-            <div className="mapping-table" role="table" aria-label="Source to FHIR field mappings">
-              <div className="mapping-table-head" role="row">
-                <span>Source evidence</span><span>FHIR destination</span><span>Status</span>
+            {activeMapping ? (
+              <div className="trace-link" aria-live="polite">
+                <span><em>{activeMapping.source}</em><strong>{activeMapping.sourceLabel}</strong><small>{activeMapping.sourceValue}</small></span>
+                <ArrowRight aria-hidden="true" />
+                <span><em>FHIR</em><strong>{activeMapping.targetPath}</strong><small>{activeMapping.targetResource}</small></span>
+                <StatusPill value={activeMapping.status} tone={activeMapping.status === "Mapped" ? "good" : "warn"} />
               </div>
-              {mappings.map((mapping) => (
-                <button type="button" role="row" onClick={() => selectMappingResource(mapping.targetResource)} key={mapping.id}>
-                  <span className="mapping-source"><em>{mapping.source}</em><span><strong>{mapping.sourceLabel}</strong><small>{mapping.sourcePath}</small><code>{mapping.sourceValue}</code></span></span>
-                  <span className="mapping-target"><ArrowRight aria-hidden="true" /><span><strong>{mapping.targetPath}</strong><small>{mapping.targetResource}</small><code>{mapping.targetValue}</code></span></span>
-                  <StatusPill value={mapping.status} tone={mapping.status === "Mapped" ? "good" : "warn"} />
-                </button>
-              ))}
+            ) : (
+              <div className="trace-link trace-link-empty"><span>Select source evidence after generating FHIR to inspect its destination.</span></div>
+            )}
+
+            <div className="trace-columns">
+              <section className="trace-pane source-trace-pane" aria-label="Source document">
+                <header><div><span className="eyebrow">Source evidence</span><h3>{sourceView === "cda" ? "HL7 CDA document" : "Companion PDF report"}</h3></div>{sourceView === "cda" ? <div className="compact-tabs" role="tablist" aria-label="CDA view"><button type="button" role="tab" aria-selected={cdaView === "structure"} className={cdaView === "structure" ? "active" : ""} onClick={() => setCdaView("structure")}>Structure</button><button type="button" role="tab" aria-selected={cdaView === "raw"} className={cdaView === "raw" ? "active" : ""} onClick={() => setCdaView("raw")}>Raw XML</button></div> : <span className="document-mode">Selectable text</span>}</header>
+
+                {sourceView === "cda" ? cdaError ? (
+                  <div className="source-empty"><AlertTriangle aria-hidden="true" /><strong>Could not read CDA</strong><span>{cdaError}</span></div>
+                ) : cdaOverview ? cdaView === "structure" ? (
+                  <div className="trace-fact-list">
+                    {cdaOverview.facts.map((fact) => {
+                      const mapping = mappings.find((item) => item.id === `map-cda-${fact.id}`);
+                      return <button type="button" className={mapping?.id === activeMapping?.id ? "active" : ""} onClick={() => mapping && selectMapping(mapping)} key={fact.id}><span className={`source-badge source-${fact.kind}`}>{fact.kind}</span><span><strong>{fact.label}</strong><small>{fact.sourcePath}</small><code>{fact.value}</code></span><ChevronRight aria-hidden="true" /></button>;
+                    })}
+                  </div>
+                ) : (
+                  <pre className="source-code trace-source-code"><code>{cdaOverview.raw.split("\n").map((line, index) => <span className={lineMatchesActiveMapping(line) ? "highlighted" : ""} key={`${line}-${index}`}><HighlightedLine text={line} terms={activeMapping?.source === "CDA" ? activeMapping.matchTerms : []} />{"\n"}</span>)}</code></pre>
+                ) : <div className="source-empty"><FileJson aria-hidden="true" /><strong>Select a CDA document</strong><span>The parsed clinical structure appears here.</span></div> : pdfError ? (
+                  <div className="source-empty"><AlertTriangle aria-hidden="true" /><strong>Could not read PDF</strong><span>{pdfError}</span></div>
+                ) : pdfOverview ? (
+                  <div className="pdf-text-viewer">
+                    {pdfOverview.pages.map((page) => <article className="pdf-text-page" key={page.pageNumber}><header><span>Synthetic clinical report</span><strong>Page {page.pageNumber}</strong></header><div>{page.lines.map((line, index) => <button type="button" className={lineMatchesActiveMapping(line) ? "highlighted" : ""} onClick={() => selectPdfLine(line)} key={`${line}-${index}`}><HighlightedLine text={line} terms={activeMapping?.source === "PDF" ? activeMapping.matchTerms : []} /></button>)}</div></article>)}
+                  </div>
+                ) : <div className="source-empty"><FileText aria-hidden="true" /><strong>Reading PDF</strong><span>Extracting selectable evidence from the report.</span></div>}
+              </section>
+
+              <section className="trace-pane output-trace-pane" aria-label="Generated FHIR resource">
+                <header><div><span className="eyebrow">Generated output</span><h3>{selectedResource ? `${selectedResource.resourceType}/${selectedResource.id}` : "FHIR R4 Bundle"}</h3></div>{selectedResource ? <StatusPill value={selectedResource.detail} tone="good" /> : null}</header>
+                {candidateText && !parsedCandidate.error ? (
+                  <><nav className="resource-tabs" aria-label="Generated FHIR resources">{parsedCandidate.resources.map((resource) => <button type="button" className={selectedResource?.key === resource.key ? "active" : ""} onClick={() => selectResource(resource.key)} title={resource.label} key={resource.key}><span className="resource-icon">{resource.resourceType.slice(0, 1)}</span><span><strong>{resource.resourceType}</strong><small>{resource.label}</small></span></button>)}</nav><JsonTrace value={selectedResource?.resource ?? parsedCandidate.bundle} mapping={activeMapping} /></>
+                ) : (
+                  <div className="generation-empty trace-output-empty"><Boxes aria-hidden="true" /><span><strong>FHIR appears here</strong><small>Generate a candidate to compare it with the selected source.</small></span></div>
+                )}
+              </section>
             </div>
-          </>
+
+            {sourceMappings.length > 0 ? <div className="trace-index" aria-label={`${sourceView.toUpperCase()} evidence traces`}>{sourceMappings.map((mapping) => <button type="button" className={mapping.id === activeMapping?.id ? "active" : ""} onClick={() => selectMapping(mapping)} key={mapping.id}><span>{mapping.sourceLabel}</span><small>{mapping.targetPath}</small></button>)}</div> : null}
+          </div>
         ) : (
-          <div className="mapping-empty"><Boxes aria-hidden="true" /><strong>Mapping explorer</strong><span>Generated resources and field-level traces appear here.</span></div>
+          <div className="mapping-empty"><Boxes aria-hidden="true" /><strong>Comparison workspace</strong><span>Upload the CDA and PDF to inspect them beside generated FHIR.</span></div>
         )}
       </section>
     </section>

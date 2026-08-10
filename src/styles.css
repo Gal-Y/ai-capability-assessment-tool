@@ -35,7 +35,7 @@
   --surface-2: #1b1f2a;
   --ink: #edf0f8;
   --ink-2: #aab1c2;
-  --muted: #7d8496;
+  --muted: #9299aa;
   --line: rgba(235, 240, 255, 0.09);
   --line-strong: rgba(235, 240, 255, 0.17);
   --accent: #8b7bff;
@@ -80,7 +80,7 @@ body {
   min-height: 100vh;
   background: var(--bg);
   color: var(--ink);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.5;
   transition: background 200ms ease, color 200ms ease;
 }
@@ -167,7 +167,7 @@ svg {
 
 .brand-cluster span {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 .top-actions {
@@ -185,7 +185,7 @@ svg {
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -291,7 +291,7 @@ svg {
   margin: 0 0 6px;
   padding: 0 10px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -361,12 +361,12 @@ svg {
 
 .synthetic-note strong {
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 650;
 }
 
 .synthetic-note small {
-  font-size: 10.5px;
+  font-size: 13px;
 }
 
 .workspace {
@@ -400,7 +400,7 @@ svg {
   display: block;
   margin-bottom: 3px;
   color: var(--accent-ink);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -438,7 +438,7 @@ svg {
   border-radius: 999px;
   background: var(--surface);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -490,7 +490,7 @@ svg {
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   transition: border-color 120ms ease, color 120ms ease;
 }
@@ -514,7 +514,7 @@ svg {
   gap: 5px;
   min-height: 28px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -539,7 +539,7 @@ svg {
   height: 22px;
   padding: 0 8px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -603,7 +603,7 @@ svg {
 
 .stat-label {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.02em;
 }
@@ -617,7 +617,7 @@ svg {
 
 .stat-tile small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .stat-hero-row {
@@ -710,7 +710,7 @@ svg {
 
 .meter-head span {
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
 }
 
@@ -743,7 +743,7 @@ svg {
   padding-top: 12px;
   border-top: 1px solid var(--line);
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .latency-row svg {
@@ -805,7 +805,7 @@ svg {
 .score-ring-value span {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -873,7 +873,7 @@ svg {
 .dimension-card > span:not(.dimension-icon) {
   overflow: hidden;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -898,7 +898,7 @@ svg {
   min-height: 30px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   line-height: 1.4;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -952,7 +952,7 @@ svg {
   border: 1px solid var(--line-strong);
   border-radius: 999px;
   background: var(--surface);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -968,7 +968,7 @@ svg {
 }
 
 .workflow-progress small {
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 550;
 }
 
@@ -995,7 +995,7 @@ svg {
 
 .readiness-copy small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.45;
   max-width: 220px;
 }
@@ -1025,7 +1025,7 @@ svg {
   align-items: center;
   gap: 7px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 550;
   white-space: nowrap;
 }
@@ -1040,7 +1040,7 @@ svg {
   margin: 0;
   overflow: hidden;
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
   text-align: right;
   text-overflow: ellipsis;
@@ -1079,7 +1079,7 @@ svg {
 
 .triage span {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1132,7 +1132,7 @@ button.finding-row:hover {
 
 .finding-body strong em {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-style: normal;
   font-weight: 550;
 }
@@ -1140,7 +1140,7 @@ button.finding-row:hover {
 .finding-body > span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1149,7 +1149,7 @@ button.finding-row:hover {
   display: flex;
   gap: 10px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 550;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1220,7 +1220,7 @@ button.finding-row:hover {
 
 .run-picker > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1232,7 +1232,7 @@ button.finding-row:hover {
   border-radius: 9px;
   background: var(--surface);
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
 }
 
@@ -1253,14 +1253,14 @@ button.finding-row:hover {
   border-radius: 999px;
   background: var(--surface);
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
 }
 
 .filter-chip em {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-style: normal;
   font-variant-numeric: tabular-nums;
 }
@@ -1344,7 +1344,7 @@ button.finding-row:hover {
   padding: 12px 0 9px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1388,14 +1388,14 @@ button.table-row:hover {
   display: block;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .case-id {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -1436,7 +1436,7 @@ button.table-row:hover {
   padding: 0 10px 9px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1529,7 +1529,7 @@ button.table-row:hover {
 .demo-launcher p {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1548,7 +1548,7 @@ button.table-row:hover {
   padding: 0 9px;
   border-radius: 6px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1570,7 +1570,7 @@ button.table-row:hover {
   border-radius: 9px;
   background: var(--ink);
   color: var(--surface);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
   white-space: nowrap;
 }
@@ -1597,7 +1597,7 @@ button.table-row:hover {
 
 .numbered-heading > span {
   color: var(--accent-ink);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -1613,7 +1613,7 @@ button.table-row:hover {
 
 .numbered-heading small {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 .mode-cards {
@@ -1646,7 +1646,7 @@ button.table-row:hover {
 
 .mode-card span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.45;
 }
 
@@ -1729,7 +1729,7 @@ button.table-row:hover {
 
 .file-name {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1745,7 +1745,7 @@ button.table-row:hover {
 
 .file-body small {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 .file-action {
@@ -1754,7 +1754,7 @@ button.table-row:hover {
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1815,7 +1815,7 @@ button.table-row:hover {
 }
 
 .rule-chip strong {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1825,7 +1825,7 @@ button.table-row:hover {
 
 .rule-chip small {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -1843,7 +1843,7 @@ button.table-row:hover {
 
 .create-footer label span {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1887,7 +1887,7 @@ button.table-row:hover {
   padding: 10px 40px 9px 10px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: .05em;
   text-transform: uppercase;
@@ -1941,13 +1941,13 @@ button.table-row:hover {
 
 .run-primary strong {
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .run-primary small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .delete-run {
@@ -2023,7 +2023,7 @@ button.table-row:hover {
 
 .run-date {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -2053,7 +2053,7 @@ button.table-row:hover {
 .toast button {
   flex-shrink: 0;
   color: var(--accent-ink);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -2135,7 +2135,7 @@ button.table-row:hover {
 .docs-toc strong {
   margin-bottom: 6px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -2148,7 +2148,7 @@ button.table-row:hover {
   padding: 0 9px;
   border-radius: 7px;
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
   text-decoration: none;
 }
@@ -2183,7 +2183,7 @@ button.table-row:hover {
 
 .docs-section-head span {
   color: var(--accent-ink);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.08em;
 }
@@ -2241,7 +2241,7 @@ button.table-row:hover {
 .backend-map span,
 .pipeline-step-doc small {
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -2266,7 +2266,7 @@ button.table-row:hover {
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent-ink);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -2296,14 +2296,14 @@ button.table-row:hover {
 }
 
 .schema-card dt {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
 }
 
 .schema-card dd {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.45;
 }
 
@@ -2316,7 +2316,7 @@ button.table-row:hover {
   border-radius: var(--radius-sm);
   background: #12141c;
   color: #d5ddf5;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
@@ -2369,7 +2369,7 @@ button.table-row:hover {
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--accent-ink);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   text-decoration: none;
 }
@@ -2429,7 +2429,7 @@ button.table-row:hover {
 .evidence-drawer p {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .icon-button {
@@ -2459,7 +2459,7 @@ button.table-row:hover {
   height: 38px;
   padding: 0 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -2500,7 +2500,7 @@ button.table-row:hover {
 
 .drawer-score-row span {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
 }
 
 .drawer-score-row strong {
@@ -2514,7 +2514,7 @@ button.table-row:hover {
 
 .drawer-section h3 {
   margin: 0 0 9px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -2532,7 +2532,7 @@ button.table-row:hover {
   margin: 0;
   padding-left: 15px;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -2557,7 +2557,7 @@ button.table-row:hover {
 
 .validation-summary > span:not(.pill) {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 .drawer-two-up {
@@ -2579,7 +2579,7 @@ button.table-row:hover {
   background: #0b0d12;
   color: #dbe3f5;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2624,7 +2624,7 @@ button.table-row:hover {
 .confirm-modal p {
   margin: 0;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
@@ -2639,7 +2639,7 @@ button.table-row:hover {
   height: 34px;
   padding: 0 13px;
   border-radius: 8px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -2753,13 +2753,13 @@ button.table-row:hover {
 
 .capability-flow small {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .capability-flow strong {
   overflow: hidden;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2809,7 +2809,7 @@ button.table-row:hover {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
   text-decoration: none;
   white-space: nowrap;
@@ -2885,14 +2885,14 @@ button.table-row:hover {
 }
 
 .source-inspector-tabs strong {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 650;
 }
 
 .source-inspector-tabs small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2931,7 +2931,7 @@ button.table-row:hover {
 
 .source-preview-head small {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
 }
 
 .compact-tabs {
@@ -2948,7 +2948,7 @@ button.table-row:hover {
   padding: 0 9px;
   border-radius: 5px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -2985,14 +2985,14 @@ button.table-row:hover {
 
 .cda-fact-list strong {
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .cda-fact-list small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3006,7 +3006,7 @@ button.table-row:hover {
   border-radius: 5px;
   background: var(--accent-soft);
   color: var(--accent-ink);
-  font-size: 9.5px;
+  font-size: 13px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -3030,7 +3030,7 @@ button.table-row:hover {
   background: color-mix(in srgb, var(--surface-2) 72%, var(--surface));
   color: var(--ink-2);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.65;
   white-space: pre;
 }
@@ -3071,7 +3071,7 @@ button.table-row:hover {
 .generation-empty strong,
 .mapping-empty strong {
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -3079,7 +3079,7 @@ button.table-row:hover {
 .generation-empty small,
 .mapping-empty span {
   max-width: 360px;
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 .generation-actions label {
@@ -3087,7 +3087,7 @@ button.table-row:hover {
   align-items: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -3098,7 +3098,7 @@ button.table-row:hover {
   border-radius: 8px;
   background: var(--surface);
   color: var(--ink);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .generation-status,
@@ -3134,11 +3134,11 @@ button.table-row:hover {
 
 .generation-status small {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
 }
 
 .generation-status strong {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -3162,7 +3162,7 @@ button.table-row:hover {
   align-items: baseline;
   gap: 5px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 .generation-facts strong {
@@ -3195,7 +3195,7 @@ button.table-row:hover {
   padding: 0 14px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
   text-transform: uppercase;
 }
@@ -3208,7 +3208,7 @@ button.table-row:hover {
   border-radius: 5px;
   background: var(--surface);
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .resource-list button {
@@ -3240,7 +3240,7 @@ button.table-row:hover {
   border-radius: 7px;
   background: var(--accent-soft);
   color: var(--accent-ink);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -3250,14 +3250,14 @@ button.table-row:hover {
 }
 
 .resource-list button strong {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
 }
 
 .resource-list button small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3292,7 +3292,7 @@ button.table-row:hover {
   border-radius: 7px;
   background: var(--surface);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
 }
 
 .mapping-summary strong {
@@ -3321,7 +3321,7 @@ button.table-row:hover {
   border-bottom: 1px solid var(--line);
   background: var(--surface-2);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 650;
   text-transform: uppercase;
 }
@@ -3359,7 +3359,7 @@ button.table-row:hover {
   border-radius: 5px;
   background: var(--accent-soft);
   color: var(--accent-ink);
-  font-size: 9.5px;
+  font-size: 13px;
   font-style: normal;
   font-weight: 700;
 }
@@ -3387,20 +3387,20 @@ button.table-row:hover {
 
 .mapping-table strong {
   color: var(--ink);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .mapping-table small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .mapping-table code {
   margin-top: 3px;
   color: var(--ink-2);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 10.5px;
+  font-size: 13px;
 }
 
 .mapping-empty {
@@ -3414,6 +3414,455 @@ button.table-row:hover {
   max-height: 260px;
   overflow: auto;
   text-align: left;
+}
+
+/* ---------------------------------------------------------------------------
+   Synchronized source-to-FHIR comparison
+--------------------------------------------------------------------------- */
+
+.trace-workspace {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.trace-toolbar {
+  display: flex;
+  min-height: 70px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.source-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.source-switch button {
+  display: flex;
+  min-width: 172px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.source-switch button:hover,
+.source-switch button.active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.source-switch button > svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.source-switch button > span {
+  display: grid;
+  min-width: 0;
+}
+
+.source-switch strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.source-switch small {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-toolbar .mapping-summary {
+  flex: 0 0 auto;
+}
+
+.trace-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 76px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+}
+
+.trace-link > span:not(.status-pill) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.trace-link em {
+  width: fit-content;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--warn) 17%, transparent);
+  color: var(--warn-text);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.trace-link strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-link small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-link > svg {
+  color: var(--warn);
+}
+
+.trace-link-empty {
+  display: flex;
+  min-height: 54px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.trace-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 630px;
+}
+
+.trace-pane {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  background: var(--surface);
+}
+
+.trace-pane + .trace-pane {
+  border-left: 1px solid var(--line);
+}
+
+.trace-pane > header {
+  display: flex;
+  min-height: 74px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trace-pane > header > div:first-child {
+  min-width: 0;
+}
+
+.trace-pane h3 {
+  margin: 2px 0 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-mode {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.trace-fact-list {
+  height: 556px;
+  overflow-y: auto;
+}
+
+.trace-fact-list > button {
+  display: grid;
+  width: 100%;
+  min-height: 76px;
+  grid-template-columns: 82px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+  text-align: left;
+}
+
+.trace-fact-list > button:hover {
+  background: var(--surface-2);
+}
+
+.trace-fact-list > button.active {
+  background: color-mix(in srgb, var(--warn) 11%, var(--surface));
+  box-shadow: inset 3px 0 var(--warn);
+}
+
+.trace-fact-list > button > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.trace-fact-list strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-fact-list small,
+.trace-fact-list code {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-fact-list code {
+  color: var(--ink-2);
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.trace-fact-list svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.trace-source-code,
+.trace-json {
+  height: 556px;
+  margin: 0;
+  overflow: auto;
+  padding: 16px;
+  background: color-mix(in srgb, var(--surface-2) 72%, var(--surface));
+  color: var(--ink-2);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre;
+}
+
+.trace-source-code code > span,
+.trace-json code > span {
+  display: block;
+  width: fit-content;
+  min-width: 100%;
+  padding: 0 5px;
+}
+
+.trace-source-code code > span.highlighted,
+.trace-json code > span.highlighted {
+  border-left: 3px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  color: var(--ink);
+}
+
+.trace-source-code mark,
+.pdf-text-page mark {
+  padding: 1px 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--warn) 34%, transparent);
+  color: inherit;
+}
+
+.pdf-text-viewer {
+  height: 556px;
+  overflow: auto;
+  padding: 22px;
+  background: #dfe3e8;
+}
+
+.pdf-text-page {
+  width: min(100%, 580px);
+  min-height: 720px;
+  margin: 0 auto 20px;
+  padding: 34px 38px;
+  background: #fff;
+  color: #1b2029;
+  box-shadow: 0 4px 18px rgba(22, 29, 38, 0.18);
+}
+
+.pdf-text-page > header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #dce0e5;
+  color: #606975;
+  font-size: 13px;
+}
+
+.pdf-text-page > div {
+  display: grid;
+  gap: 4px;
+}
+
+.pdf-text-page button {
+  width: 100%;
+  padding: 4px 6px;
+  border-radius: 3px;
+  color: #252b35;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: left;
+}
+
+.pdf-text-page button:hover {
+  background: #f3f5f7;
+}
+
+.pdf-text-page button.highlighted {
+  background: #fff1a8;
+  box-shadow: inset 3px 0 #d89a00;
+}
+
+.output-trace-pane {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.resource-tabs {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.resource-tabs button {
+  display: grid;
+  min-width: 112px;
+  max-width: 150px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--ink-2);
+  text-align: left;
+}
+
+.resource-tabs button:hover,
+.resource-tabs button.active {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.resource-tabs button.active {
+  border-color: color-mix(in srgb, var(--warn) 58%, var(--line));
+  box-shadow: inset 0 -2px var(--warn);
+}
+
+.resource-tabs button > span:last-child {
+  display: grid;
+  min-width: 0;
+}
+
+.resource-tabs strong,
+.resource-tabs small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-tabs strong {
+  font-size: 13px;
+}
+
+.resource-tabs small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.trace-json {
+  height: 486px;
+}
+
+.trace-output-empty {
+  min-height: 556px;
+  border: 0;
+  border-radius: 0;
+}
+
+.trace-index {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.trace-index button {
+  display: grid;
+  min-width: 142px;
+  max-width: 190px;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink-2);
+  text-align: left;
+}
+
+.trace-index button:hover,
+.trace-index button.active {
+  border-color: color-mix(in srgb, var(--warn) 56%, var(--line));
+}
+
+.trace-index button.active {
+  background: color-mix(in srgb, var(--warn) 11%, var(--surface));
+  box-shadow: inset 0 -2px var(--warn);
+}
+
+.trace-index span,
+.trace-index small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-index span {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.trace-index small {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3545,7 +3994,7 @@ button.table-row:hover {
 
   .brand-cluster strong {
     width: 94px;
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.15;
   }
 
@@ -3883,5 +4332,96 @@ button.table-row:hover {
   .mapping-table small,
   .mapping-table code {
     white-space: normal;
+  }
+
+  .trace-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .source-switch {
+    width: 100%;
+  }
+
+  .source-switch button {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .trace-toolbar .mapping-summary {
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .trace-link {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .trace-link > svg {
+    display: none;
+  }
+
+  .trace-link > span:nth-of-type(2) {
+    grid-column: 1;
+  }
+
+  .trace-link > .status-pill {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .trace-link strong,
+  .trace-link small {
+    white-space: normal;
+  }
+
+  .trace-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .trace-pane + .trace-pane {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .trace-pane > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .trace-pane h3 {
+    white-space: normal;
+  }
+
+  .trace-fact-list,
+  .trace-source-code,
+  .pdf-text-viewer,
+  .trace-output-empty {
+    height: 460px;
+    min-height: 460px;
+  }
+
+  .trace-fact-list > button {
+    grid-template-columns: 72px minmax(0, 1fr) 14px;
+  }
+
+  .trace-fact-list strong,
+  .trace-fact-list small,
+  .trace-fact-list code {
+    white-space: normal;
+  }
+
+  .pdf-text-viewer {
+    padding: 12px;
+  }
+
+  .pdf-text-page {
+    min-height: 600px;
+    padding: 24px 20px;
+  }
+
+  .trace-json {
+    height: 420px;
   }
 }

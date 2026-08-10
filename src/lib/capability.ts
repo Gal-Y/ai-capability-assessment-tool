@@ -1,3 +1,5 @@
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+
 export type ClinicalSourceFact = {
   id: string;
   source: "CDA" | "PDF";
@@ -14,6 +16,17 @@ export type CdaOverview = {
   documentId: string;
   facts: ClinicalSourceFact[];
   raw: string;
+};
+
+export type PdfPageText = {
+  pageNumber: number;
+  lines: string[];
+  text: string;
+};
+
+export type PdfOverview = {
+  pages: PdfPageText[];
+  rawText: string;
 };
 
 export type FhirResourceView = {
@@ -35,6 +48,8 @@ export type CapabilityMapping = {
   targetPath: string;
   targetValue: string;
   status: "Mapped" | "Review";
+  sourcePage?: number;
+  matchTerms: string[];
 };
 
 export type ParsedFhirCandidate = {
@@ -58,6 +73,17 @@ const textOf = (element: Element | null) => element?.textContent?.trim() ?? "";
 const formatCdaDate = (value: string) => {
   if (!/^\d{8}/.test(value)) return value;
   return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+};
+
+const formatLongDate = (value: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(`${value}T00:00:00Z`);
+  return new Intl.DateTimeFormat("en-AU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
 };
 
 const codeSystemLabel = (element: Element | null) => {
@@ -175,6 +201,47 @@ export const parseCdaDocument = async (file: File): Promise<CdaOverview> => {
   return { title, documentId, facts, raw };
 };
 
+export const parsePdfDocument = async (file: File): Promise<PdfOverview> => {
+  const { GlobalWorkerOptions, getDocument } = await import("pdfjs-dist");
+  GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  const data = new Uint8Array(await file.arrayBuffer());
+  const document = await getDocument({ data }).promise;
+  const pages: PdfPageText[] = [];
+
+  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    const page = await document.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const lines: string[] = [];
+    let currentLine: string[] = [];
+
+    content.items.forEach((item) => {
+      if (!("str" in item)) return;
+      const value = item.str.trim();
+      if (value) currentLine.push(value);
+      if ("hasEOL" in item && item.hasEOL && currentLine.length > 0) {
+        lines.push(currentLine.join(" ").replace(/\s+/g, " ").trim());
+        currentLine = [];
+      }
+    });
+
+    if (currentLine.length > 0) {
+      lines.push(currentLine.join(" ").replace(/\s+/g, " ").trim());
+    }
+
+    const readableLines = lines.filter(Boolean);
+    pages.push({
+      pageNumber,
+      lines: readableLines,
+      text: readableLines.join("\n"),
+    });
+  }
+
+  return {
+    pages,
+    rawText: pages.map((page) => page.text).join("\n\n"),
+  };
+};
+
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -281,10 +348,52 @@ export const parseFhirCandidate = (raw: string): ParsedFhirCandidate => {
 const includesValue = (candidate: string, expected: string) =>
   candidate.toLowerCase().includes(expected.toLowerCase());
 
+const normalized = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9.%/]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const evidenceTerms = (fact: ClinicalSourceFact) => {
+  const terms = [fact.code, fact.value, fact.label]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .map((value) => value.trim());
+  if (fact.id === "patient-birth") {
+    terms.push(formatLongDate(fact.value), fact.value.replace(/-/g, ""));
+  }
+  return Array.from(new Set(terms));
+};
+
+const findPdfEvidence = (fact: ClinicalSourceFact, pdf: PdfOverview) => {
+  const terms = evidenceTerms(fact);
+  const scored: Array<{ pageNumber: number; text: string; score: number }> = [];
+
+  pdf.pages.forEach((page) => {
+    page.lines.forEach((line, index) => {
+      const window = page.lines.slice(Math.max(0, index - 1), index + 3).join(" ");
+      const haystack = normalized(window);
+      let score = 0;
+
+      terms.forEach((term, termIndex) => {
+        if (haystack.includes(normalized(term))) score += termIndex === 0 ? 5 : 3;
+      });
+
+      if (fact.kind === "observation" && fact.code && haystack.includes(normalized(fact.code))) {
+        score += 4;
+      }
+
+      if (score >= 5) scored.push({ pageNumber: page.pageNumber, text: window, score });
+    });
+  });
+
+  return scored.sort((left, right) => right.score - left.score)[0] ?? null;
+};
+
 export const buildCapabilityMappings = (
   cda: CdaOverview | null,
   resources: FhirResourceView[],
-  hasPdf: boolean,
+  pdf: PdfOverview | null,
 ): CapabilityMapping[] => {
   if (!cda || resources.length === 0) return [];
   const mappings: CapabilityMapping[] = [];
@@ -338,31 +447,63 @@ export const buildCapabilityMappings = (
       }
     }
 
+    const targetResource = target ? `${target.resourceType}/${target.id}` : "No matching resource";
+    const status = target && targetValue ? "Mapped" : "Review";
     mappings.push({
-      id: `map-${fact.id}`,
+      id: `map-cda-${fact.id}`,
       source: fact.source,
       sourceLabel: fact.label,
       sourceValue: fact.value,
       sourcePath: fact.sourcePath,
-      targetResource: target ? `${target.resourceType}/${target.id}` : "No matching resource",
+      targetResource,
       targetPath: targetPath || "Not mapped",
       targetValue: targetValue || "Review generated output",
-      status: target && targetValue ? "Mapped" : "Review",
+      status,
+      matchTerms: evidenceTerms(fact),
     });
+
+    if (pdf) {
+      const pdfEvidence = findPdfEvidence(fact, pdf);
+      if (pdfEvidence) {
+        mappings.push({
+          id: `map-pdf-${fact.id}`,
+          source: "PDF",
+          sourceLabel: fact.label,
+          sourceValue: pdfEvidence.text,
+          sourcePath: `PDF page ${pdfEvidence.pageNumber}`,
+          targetResource,
+          targetPath: targetPath || "Not mapped",
+          targetValue: targetValue || "Review generated output",
+          status,
+          sourcePage: pdfEvidence.pageNumber,
+          matchTerms: evidenceTerms(fact),
+        });
+      }
+    }
   });
 
-  if (hasPdf && report) {
+  if (pdf && report) {
     const conclusion = stringValue(report.resource.conclusion);
+    const narrativePage = pdf.pages.find((page) =>
+      normalized(page.text).includes("known type 2 diabetes mellitus"),
+    );
+    const narrative = narrativePage?.lines
+      .filter((line) =>
+        /clinical context|known type 2 diabetes|glycaemic management|egfr result/i.test(line),
+      )
+      .join(" ");
     mappings.push({
       id: "map-pdf-conclusion",
       source: "PDF",
       sourceLabel: "Pathology narrative",
-      sourceValue: "Human-readable companion evidence",
-      sourcePath: "PDF report body",
+      sourceValue: narrative || "Human-readable companion evidence",
+      sourcePath: `PDF page ${narrativePage?.pageNumber ?? 1}`,
       targetResource: `DiagnosticReport/${report.id}`,
       targetPath: "DiagnosticReport.conclusion",
       targetValue: conclusion || "No conclusion generated",
       status: conclusion ? "Mapped" : "Review",
+      sourcePage: narrativePage?.pageNumber ?? 1,
+      matchTerms: ["Clinical context", "Known type 2 diabetes mellitus", "glycaemic management"],
     });
   }
 
