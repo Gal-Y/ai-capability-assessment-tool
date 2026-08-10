@@ -3032,7 +3032,7 @@ button.table-row:hover {
 }
 
 .trace-count.active {
-  color: var(--warn-text);
+  color: var(--accent-ink);
 }
 
 .source-document-viewer {
@@ -3062,16 +3062,16 @@ button.table-row:hover {
 }
 
 .cda-document code > span.source-highlight {
-  border-left-color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--ink);
 }
 
 .cda-document mark {
   padding: 1px 2px;
   border-radius: 3px;
-  background: #ffe996;
-  color: #22242a;
+  background: color-mix(in srgb, var(--accent) 24%, #fff);
+  color: #1b1c22;
 }
 
 .pdf-canvas-viewer {
@@ -3107,10 +3107,10 @@ button.table-row:hover {
   position: absolute;
   min-width: 3px;
   min-height: 5px;
-  border: 2px solid #e49a00;
+  border: 2px solid color-mix(in srgb, var(--accent) 88%, #111);
   border-radius: 3px;
-  background: rgba(255, 218, 68, 0.42);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.68), 0 0 0 4px rgba(228, 154, 0, 0.28);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.88), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .pdf-rendering {
@@ -3141,7 +3141,7 @@ button.table-row:hover {
 }
 
 .pdf-page-meta strong {
-  color: #805700;
+  color: var(--accent-ink);
   font-weight: 650;
 }
 
@@ -3229,12 +3229,12 @@ button.table-row:hover {
 }
 
 .fhir-trace-status.field-active {
-  background: color-mix(in srgb, var(--warn) 9%, transparent);
-  color: var(--warn-text);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--accent-ink);
 }
 
 .fhir-trace-status.field-active strong {
-  color: var(--warn-text);
+  color: var(--accent-ink);
 }
 
 .fhir-resource-stream {
@@ -3356,8 +3356,8 @@ button.table-row:hover {
 }
 
 .fhir-json button.active {
-  border-left-color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .fhir-json button > span {
