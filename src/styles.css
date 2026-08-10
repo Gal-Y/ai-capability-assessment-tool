@@ -3239,6 +3239,7 @@ button.table-row:hover {
 }
 
 .document-inspector {
+  --trace-color: var(--accent);
   display: grid;
   height: clamp(560px, calc(100vh - 210px), 760px);
   min-height: 0;
@@ -3332,7 +3333,7 @@ button.table-row:hover {
 }
 
 .trace-count.active {
-  color: var(--accent-ink);
+  color: var(--trace-color);
 }
 
 .source-document-viewer {
@@ -3362,15 +3363,21 @@ button.table-row:hover {
 }
 
 .cda-document code > span.source-highlight {
-  border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-left-color: var(--trace-color);
+  background: transparent;
   color: var(--ink);
 }
 
 .cda-document mark {
-  padding: 1px 2px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--accent) 24%, #fff);
+  padding: 0 1px;
+  border-radius: 0;
+  background: linear-gradient(
+    180deg,
+    transparent 8%,
+    color-mix(in srgb, var(--trace-color) 35%, #fff) 8%,
+    color-mix(in srgb, var(--trace-color) 35%, #fff) 88%,
+    transparent 88%
+  );
   color: #1b1c22;
 }
 
@@ -3407,10 +3414,13 @@ button.table-row:hover {
   position: absolute;
   min-width: 3px;
   min-height: 5px;
-  border: 2px solid color-mix(in srgb, var(--accent) 88%, #111);
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.88), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  border: 0;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--trace-color) 42%, #fff);
+  box-shadow: none;
+  mix-blend-mode: multiply;
+  transform: translateY(12%) scaleY(0.72);
+  transform-origin: center;
 }
 
 .pdf-rendering {
@@ -3441,7 +3451,7 @@ button.table-row:hover {
 }
 
 .pdf-page-meta strong {
-  color: var(--accent-ink);
+  color: var(--trace-color);
   font-weight: 650;
 }
 
@@ -3491,6 +3501,12 @@ button.table-row:hover {
   color: var(--accent-ink);
 }
 
+.document-inspector .resource-header-meta .resource-link-state.linked {
+  border-color: color-mix(in srgb, var(--trace-color) 48%, var(--line));
+  background: color-mix(in srgb, var(--trace-color) 13%, transparent);
+  color: var(--trace-color);
+}
+
 .resource-icon {
   display: grid;
   width: 28px;
@@ -3523,18 +3539,18 @@ button.table-row:hover {
 
 .fhir-trace-status strong {
   flex: 0 0 auto;
-  color: var(--accent-ink);
+  color: var(--trace-color);
   font-size: 12px;
   font-weight: 650;
 }
 
 .fhir-trace-status.field-active {
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--trace-color) 9%, transparent);
+  color: var(--trace-color);
 }
 
 .fhir-trace-status.field-active strong {
-  color: var(--accent-ink);
+  color: var(--trace-color);
 }
 
 .fhir-resource-stream {
@@ -3553,6 +3569,7 @@ button.table-row:hover {
   align-self: start;
   overflow: hidden;
   border: 1px solid var(--line);
+  border-left: 3px solid color-mix(in srgb, var(--trace-color) 68%, var(--line));
   border-radius: 7px;
   background: var(--surface);
   transition: border-color 120ms ease, box-shadow 120ms ease;
@@ -3561,8 +3578,8 @@ button.table-row:hover {
 .fhir-resource-card:hover,
 .fhir-resource-card:focus-visible,
 .fhir-resource-card.active {
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
-  box-shadow: inset 3px 0 var(--accent);
+  border-color: var(--trace-color);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--trace-color) 28%, transparent);
   outline: none;
 }
 
@@ -3601,6 +3618,17 @@ button.table-row:hover {
 .fhir-resource-card .resource-link-state {
   min-height: 24px;
   font-size: 11px;
+}
+
+.fhir-resource-card .resource-icon {
+  background: color-mix(in srgb, var(--trace-color) 16%, transparent);
+  color: var(--trace-color);
+}
+
+.fhir-resource-card .resource-link-state.linked {
+  border-color: color-mix(in srgb, var(--trace-color) 45%, var(--line));
+  background: color-mix(in srgb, var(--trace-color) 12%, transparent);
+  color: var(--trace-color);
 }
 
 .fhir-json {
@@ -3646,18 +3674,18 @@ button.table-row:hover {
 }
 
 .fhir-json button.mapped {
-  border-left-color: color-mix(in srgb, var(--accent) 58%, transparent);
+  border-left-color: color-mix(in srgb, var(--trace-color) 64%, transparent);
   color: var(--ink);
   cursor: pointer;
 }
 
 .fhir-json button.mapped:hover {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--trace-color) 10%, transparent);
 }
 
 .fhir-json button.active {
-  border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-left-color: var(--trace-color);
+  background: color-mix(in srgb, var(--trace-color) 14%, transparent);
 }
 
 .fhir-json button > span {
@@ -3666,7 +3694,7 @@ button.table-row:hover {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--surface);
-  color: var(--accent-ink);
+  color: var(--trace-color);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   font-size: 13px;
   font-weight: 650;

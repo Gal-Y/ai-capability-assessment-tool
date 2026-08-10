@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -1016,6 +1016,21 @@ const targetField = (mapping: CapabilityMapping) => mapping.targetPath
     ?.replace(/\[\d+\]/g, "")
     .trim() ?? "";
 
+const traceColors = [
+  "#8b7bff",
+  "#28b7d6",
+  "#35c88a",
+  "#efb84a",
+  "#eb6f92",
+  "#518eff",
+  "#ef7d59",
+  "#9bc85b",
+];
+
+const traceStyle = (index: number) => ({
+  "--trace-color": traceColors[Math.max(0, index) % traceColors.length],
+}) as CSSProperties;
+
 const JsonTrace = ({
   value,
   mappings,
@@ -1286,6 +1301,9 @@ const CapabilityOverviewPage = ({
 
   const selectedResource =
     parsedCandidate.resources.find((resource) => resource.key === selectedResourceKey) ?? null;
+  const selectedResourceIndex = parsedCandidate.resources.findIndex(
+    (resource) => resource.key === selectedResourceKey,
+  );
   const selectedTarget = selectedResource
     ? `${selectedResource.resourceType}/${selectedResource.id}`
     : null;
@@ -1379,7 +1397,7 @@ const CapabilityOverviewPage = ({
         </div>
       ) : null}
 
-      <section className="document-inspector" aria-label="Source document and generated FHIR comparison">
+      <section className="document-inspector" style={traceStyle(selectedResourceIndex)} aria-label="Source document and generated FHIR comparison">
         <section className="document-pane source-document-pane" aria-label="Source document">
           <header>
             <div><span className="eyebrow">Source document</span><h2>{sourceView === "cda" ? "CDA document" : "PDF report"}</h2></div>
@@ -1421,13 +1439,14 @@ const CapabilityOverviewPage = ({
                 <strong>{highlightedMappings.length > 0 ? `${highlightedMappings.length} ${sourceView.toUpperCase()} ${highlightedMappings.length === 1 ? "field" : "fields"}` : `No ${sourceView.toUpperCase()} evidence`}</strong>
               </div>
               <div className="fhir-resource-stream" aria-label="Complete generated FHIR bundle">
-                {parsedCandidate.resources.map((resource) => {
+                {parsedCandidate.resources.map((resource, resourceIndex) => {
                   const target = `${resource.resourceType}/${resource.id}`;
                   const linkedMappings = sourceMappings.filter((mapping) => mapping.targetResource === target);
                   const isActive = selectedResource?.key === resource.key;
                   return (
                     <article
                       className={`fhir-resource-card ${isActive ? "active" : ""} ${linkedMappings.length > 0 ? "linked" : "unlinked"}`}
+                      style={traceStyle(resourceIndex)}
                       tabIndex={0}
                       onMouseEnter={() => traceResource(resource.key)}
                       onFocus={(event) => {
