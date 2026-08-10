@@ -362,6 +362,9 @@ const evidenceTerms = (fact: ClinicalSourceFact) => {
   if (fact.id === "patient-birth") {
     terms.push(formatLongDate(fact.value), fact.value.replace(/-/g, ""));
   }
+  if (fact.id === "patient-name") {
+    terms.push(...fact.value.split(/\s+/).filter((part) => part.length > 2));
+  }
   return Array.from(new Set(terms));
 };
 

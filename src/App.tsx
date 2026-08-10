@@ -1213,7 +1213,12 @@ const CapabilityOverviewPage = ({
   const selectSourceView = (view: "cda" | "pdf") => {
     setSourceView(view);
     const source = view.toUpperCase();
-    const mapping = mappings.find(
+    const sameField = mappings.find(
+      (item) => item.source === source &&
+        item.targetResource === selectedTarget &&
+        item.targetPath === activeMapping?.targetPath,
+    );
+    const mapping = sameField ?? mappings.find(
       (item) => item.source === source && item.targetResource === selectedTarget,
     );
     setSelectedMappingId(mapping?.id ?? null);
