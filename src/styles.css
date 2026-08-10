@@ -3007,6 +3007,34 @@ button.table-row:hover {
   box-shadow: 0 1px 3px rgba(23, 26, 33, 0.11);
 }
 
+.source-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.trace-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.trace-count svg {
+  width: 13px;
+  height: 13px;
+}
+
+.trace-count.active {
+  color: var(--warn-text);
+}
+
 .source-document-viewer {
   min-height: 0;
   overflow: auto;
@@ -3118,7 +3146,7 @@ button.table-row:hover {
 }
 
 .fhir-document-pane {
-  grid-template-rows: 68px auto auto minmax(0, 1fr);
+  grid-template-rows: 68px 38px minmax(0, 1fr);
 }
 
 .resource-detail {
@@ -3163,82 +3191,6 @@ button.table-row:hover {
   color: var(--accent-ink);
 }
 
-.fhir-resource-list {
-  display: flex;
-  gap: 4px;
-  min-width: 0;
-  overflow-x: auto;
-  padding: 8px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-}
-
-.fhir-resource-list button {
-  display: grid;
-  min-width: 116px;
-  max-width: 165px;
-  grid-template-columns: 28px minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  color: var(--ink-2);
-  text-align: left;
-}
-
-.fhir-resource-list button.unlinked:not(.active) {
-  opacity: 0.62;
-}
-
-.fhir-resource-list button:hover,
-.fhir-resource-list button.active {
-  border-color: var(--line);
-  background: var(--surface);
-}
-
-.fhir-resource-list button.active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-  box-shadow: inset 0 -2px var(--accent);
-}
-
-.fhir-resource-list button > span:last-child {
-  display: grid;
-  min-width: 0;
-}
-
-.fhir-resource-list em {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 600;
-}
-
-.fhir-resource-list em svg {
-  width: 11px;
-  height: 11px;
-}
-
-.fhir-resource-list button.linked em {
-  color: var(--accent-ink);
-}
-
-.fhir-resource-list strong,
-.fhir-resource-list small {
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fhir-resource-list small {
-  color: var(--muted);
-}
-
 .resource-icon {
   display: grid;
   width: 28px;
@@ -3251,17 +3203,104 @@ button.table-row:hover {
   font-weight: 700;
 }
 
-.fhir-field-guide {
-  min-height: 36px;
-  padding: 8px 12px;
+.fhir-trace-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
   font-size: 13px;
 }
 
-.fhir-field-guide.active {
+.fhir-trace-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fhir-trace-status strong {
+  flex: 0 0 auto;
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.fhir-trace-status.field-active {
   background: color-mix(in srgb, var(--warn) 9%, transparent);
   color: var(--warn-text);
+}
+
+.fhir-trace-status.field-active strong {
+  color: var(--warn-text);
+}
+
+.fhir-resource-stream {
+  display: grid;
+  min-height: 0;
+  align-content: start;
+  gap: 8px;
+  overflow: auto;
+  padding: 10px;
+  background: color-mix(in srgb, var(--surface-2) 76%, var(--surface));
+}
+
+.fhir-resource-card {
+  height: max-content;
+  min-width: 0;
+  align-self: start;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.fhir-resource-card:hover,
+.fhir-resource-card:focus-visible,
+.fhir-resource-card.active {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  box-shadow: inset 3px 0 var(--accent);
+  outline: none;
+}
+
+.fhir-resource-card > header {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+}
+
+.resource-card-title {
+  display: grid;
+  min-width: 0;
+}
+
+.resource-card-title strong,
+.resource-card-title small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-card-title strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.resource-card-title small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fhir-resource-card .resource-link-state {
+  min-height: 24px;
+  font-size: 11px;
 }
 
 .fhir-json {
@@ -3272,6 +3311,15 @@ button.table-row:hover {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
   line-height: 1.7;
+}
+
+.fhir-resource-card .fhir-json {
+  overflow: visible;
+  padding: 8px 0 10px;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .fhir-json button {

@@ -3,7 +3,7 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 export type ClinicalSourceFact = {
   id: string;
   source: "CDA" | "PDF";
-  kind: "patient" | "observation" | "condition" | "report";
+  kind: "patient" | "practitioner" | "organization" | "observation" | "condition" | "report";
   label: string;
   value: string;
   code?: string;
@@ -162,6 +162,69 @@ export const parseCdaDocument = async (file: File): Promise<CdaOverview> => {
       label: "Birth date",
       value: formatCdaDate(birthDate),
       sourcePath: "recordTarget.patientRole.patient.birthTime.value",
+    });
+  }
+
+  const author = firstElement(root, "author");
+  const assignedAuthor = author ? firstElement(author, "assignedAuthor") : null;
+  const practitionerId = assignedAuthor
+    ? directChild(assignedAuthor, "id")?.getAttribute("extension")
+    : null;
+  const assignedPerson = assignedAuthor ? firstElement(assignedAuthor, "assignedPerson") : null;
+  const practitionerName = assignedPerson ? firstElement(assignedPerson, "name") : null;
+  const practitionerGiven = textOf(practitionerName ? firstElement(practitionerName, "given") : null);
+  const practitionerFamily = textOf(practitionerName ? firstElement(practitionerName, "family") : null);
+
+  if (practitionerId) {
+    facts.push({
+      id: "practitioner-id",
+      source: "CDA",
+      kind: "practitioner",
+      label: "Author identifier",
+      value: practitionerId,
+      sourcePath: "author.assignedAuthor.id.extension",
+    });
+  }
+  if (practitionerGiven || practitionerFamily) {
+    facts.push({
+      id: "practitioner-name",
+      source: "CDA",
+      kind: "practitioner",
+      label: "Author name",
+      value: [practitionerGiven, practitionerFamily].filter(Boolean).join(" "),
+      sourcePath: "author.assignedAuthor.assignedPerson.name",
+    });
+  }
+
+  const custodian = firstElement(root, "custodian");
+  const custodianOrganization = custodian
+    ? firstElement(custodian, "representedCustodianOrganization")
+    : null;
+  const organizationId = custodianOrganization
+    ? directChild(custodianOrganization, "id")?.getAttribute("extension")
+    : null;
+  const organizationName = textOf(
+    custodianOrganization ? directChild(custodianOrganization, "name") : null,
+  );
+
+  if (organizationId) {
+    facts.push({
+      id: "organization-id",
+      source: "CDA",
+      kind: "organization",
+      label: "Custodian identifier",
+      value: organizationId,
+      sourcePath: "custodian.assignedCustodian.representedCustodianOrganization.id.extension",
+    });
+  }
+  if (organizationName) {
+    facts.push({
+      id: "organization-name",
+      source: "CDA",
+      kind: "organization",
+      label: "Custodian organization",
+      value: organizationName,
+      sourcePath: "custodian.assignedCustodian.representedCustodianOrganization.name",
     });
   }
 
@@ -338,12 +401,13 @@ const resourceLabel = (resource: Record<string, unknown>) => {
   const resourceType = stringValue(resource.resourceType) || "Resource";
   const coding = codingFor(resource);
 
-  if (resourceType === "Patient") {
+  if (resourceType === "Patient" || resourceType === "Practitioner") {
     const name = asRecord(asArray(resource.name)[0]);
     const given = asArray(name?.given).map(stringValue).filter(Boolean).join(" ");
     const family = stringValue(name?.family);
-    return [given, family].filter(Boolean).join(" ") || "Patient context";
+    return [given, family].filter(Boolean).join(" ") || `${resourceType} context`;
   }
+  if (resourceType === "Organization") return stringValue(resource.name) || "Organization context";
   return coding.display || coding.code || stringValue(resource.id) || resourceType;
 };
 
@@ -358,6 +422,10 @@ const resourceDetail = (resource: Record<string, unknown>) => {
   if (resourceType === "Patient") {
     const identifier = asRecord(asArray(resource.identifier)[0]);
     return stringValue(identifier?.value) || "Patient resource";
+  }
+  if (resourceType === "Practitioner" || resourceType === "Organization") {
+    const identifier = asRecord(asArray(resource.identifier)[0]);
+    return stringValue(identifier?.value) || `${resourceType} resource`;
   }
   return stringValue(resource.id) || "FHIR resource";
 };
@@ -426,7 +494,7 @@ const evidenceTerms = (fact: ClinicalSourceFact) => {
   if (fact.id === "patient-birth") {
     terms.push(formatLongDate(fact.value), fact.value.replace(/-/g, ""));
   }
-  if (fact.id === "patient-name") {
+  if (fact.id.endsWith("-name") && (fact.kind === "patient" || fact.kind === "practitioner")) {
     terms.push(...fact.value.split(/\s+/).filter((part) => part.length > 2));
   }
   return Array.from(new Set(terms));
@@ -465,6 +533,8 @@ export const buildCapabilityMappings = (
   if (!cda || resources.length === 0) return [];
   const mappings: CapabilityMapping[] = [];
   const patient = resources.find((item) => item.resourceType === "Patient");
+  const practitioner = resources.find((item) => item.resourceType === "Practitioner");
+  const organization = resources.find((item) => item.resourceType === "Organization");
   const observations = resources.filter((item) => item.resourceType === "Observation");
   const conditions = resources.filter((item) => item.resourceType === "Condition");
   const report = resources.find((item) => item.resourceType === "DiagnosticReport");
@@ -487,6 +557,30 @@ export const buildCapabilityMappings = (
         } else {
           targetPath = "Patient.birthDate";
           targetValue = stringValue(patient.resource.birthDate);
+        }
+      }
+    } else if (fact.kind === "practitioner") {
+      target = practitioner;
+      if (practitioner) {
+        if (fact.id === "practitioner-id") {
+          const identifier = asRecord(asArray(practitioner.resource.identifier)[0]);
+          targetPath = "Practitioner.identifier[0].value";
+          targetValue = stringValue(identifier?.value);
+        } else {
+          targetPath = "Practitioner.name[0]";
+          targetValue = practitioner.label;
+        }
+      }
+    } else if (fact.kind === "organization") {
+      target = organization;
+      if (organization) {
+        if (fact.id === "organization-id") {
+          const identifier = asRecord(asArray(organization.resource.identifier)[0]);
+          targetPath = "Organization.identifier[0].value";
+          targetValue = stringValue(identifier?.value);
+        } else {
+          targetPath = "Organization.name";
+          targetValue = stringValue(organization.resource.name);
         }
       }
     } else if (fact.kind === "observation") {
