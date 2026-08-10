@@ -29,6 +29,23 @@ export type PdfOverview = {
   rawText: string;
 };
 
+export type PdfTextBox = {
+  text: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+export type RenderedPdfPage = {
+  canvas: HTMLCanvasElement;
+  pageNumber: number;
+  pageCount: number;
+  width: number;
+  height: number;
+  textBoxes: PdfTextBox[];
+};
+
 export type FhirResourceView = {
   key: string;
   resourceType: string;
@@ -240,6 +257,53 @@ export const parsePdfDocument = async (file: File): Promise<PdfOverview> => {
     pages,
     rawText: pages.map((page) => page.text).join("\n\n"),
   };
+};
+
+export const renderPdfPage = async (
+  file: File,
+  requestedPage = 1,
+  scale = 2,
+): Promise<RenderedPdfPage> => {
+  const { GlobalWorkerOptions, Util, getDocument } = await import("pdfjs-dist");
+  GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  const data = new Uint8Array(await file.arrayBuffer());
+  const loadingTask = getDocument({ data });
+  const pdfDocument = await loadingTask.promise;
+
+  try {
+    const pageNumber = Math.min(Math.max(1, requestedPage), pdfDocument.numPages);
+    const page = await pdfDocument.getPage(pageNumber);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+
+    await page.render({ canvas, viewport }).promise;
+    const content = await page.getTextContent();
+    const textBoxes = content.items.flatMap((item) => {
+      if (!("str" in item) || !item.str.trim()) return [];
+      const transform = Util.transform(viewport.transform, item.transform);
+      const height = Math.max(8, Math.hypot(transform[2], transform[3]));
+      return [{
+        text: item.str,
+        left: transform[4],
+        top: transform[5] - height,
+        width: Math.max(2, item.width * scale),
+        height,
+      }];
+    });
+
+    return {
+      canvas,
+      pageNumber,
+      pageCount: pdfDocument.numPages,
+      width: viewport.width,
+      height: viewport.height,
+      textBoxes,
+    };
+  } finally {
+    await loadingTask.destroy();
+  }
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
