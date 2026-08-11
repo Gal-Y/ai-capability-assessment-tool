@@ -756,9 +756,135 @@ svg {
   transition: width 420ms ease;
 }
 
-.progress-card {
+.evaluation-loading-card {
   display: grid;
-  gap: 4px;
+  align-content: center;
+  gap: 24px;
+  min-height: 390px;
+  padding: 34px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: calc(var(--radius) + 2px);
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--accent-soft) 62%, transparent), transparent 48%),
+    var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.evaluation-loading-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.evaluation-loading-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 14px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.evaluation-loading-icon svg {
+  width: 21px;
+  height: 21px;
+  animation: evaluationPulse 1.5s ease-in-out infinite;
+}
+
+.evaluation-loading-head > div {
+  min-width: 0;
+}
+
+.evaluation-loading-head h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.evaluation-loading-head p {
+  margin: 4px 0 0;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.evaluation-loading-value {
+  display: grid;
+  justify-items: end;
+  min-width: 84px;
+  color: var(--muted);
+}
+
+.evaluation-loading-value strong {
+  color: var(--ink);
+  font-size: 28px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.evaluation-loading-value small {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.evaluation-progress-track {
+  position: relative;
+  overflow: hidden;
+  height: 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.evaluation-progress-track > span {
+  position: relative;
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 500ms ease;
+}
+
+.evaluation-progress-track > span::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, .24);
+  content: "";
+  animation: evaluationPulse 1.5s ease-in-out infinite;
+}
+
+.evaluation-loading-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.evaluation-loading-foot > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.evaluation-loading-foot svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent-ink);
 }
 
 .workflow-progress {
@@ -790,7 +916,8 @@ svg {
   display: none;
 }
 
-.workflow-progress > div.complete::before {
+.workflow-progress > div.complete::before,
+.workflow-progress > div.active::before {
   background: var(--accent);
 }
 
@@ -811,6 +938,17 @@ svg {
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
+}
+
+.workflow-progress > div.active > span {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.workflow-progress > div.active > small {
+  color: var(--accent-ink);
 }
 
 .workflow-progress svg {
@@ -3291,6 +3429,11 @@ button.table-row:hover {
    Motion
 --------------------------------------------------------------------------- */
 
+@keyframes evaluationPulse {
+  0%, 100% { opacity: .42; }
+  50% { opacity: 1; }
+}
+
 @keyframes backdropIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -4459,6 +4602,37 @@ button.table-row:hover {
 
   .workflow-progress > div::before {
     display: none;
+  }
+
+  .evaluation-loading-card {
+    min-height: 430px;
+    padding: 26px 20px;
+  }
+
+  .evaluation-loading-head {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .evaluation-loading-head h2 {
+    font-size: 21px;
+  }
+
+  .evaluation-loading-value {
+    grid-column: 1 / -1;
+    grid-template-columns: auto auto;
+    align-items: baseline;
+    justify-content: space-between;
+    justify-items: start;
+    width: 100%;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  .evaluation-loading-foot {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .create-footer {

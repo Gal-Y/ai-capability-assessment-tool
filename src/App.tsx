@@ -666,20 +666,127 @@ const workflowStages = [
   ["COMPLETED", "Complete"],
 ] as const;
 
+type WorkflowStageId = (typeof workflowStages)[number][0];
+
+const workflowStageMeta: Record<
+  WorkflowStageId,
+  { title: string; detail: string; progress: number }
+> = {
+  QUEUED: {
+    title: "Preparing evaluation",
+    detail: "Your files are uploaded and the assessment workflow is starting.",
+    progress: 8,
+  },
+  VALIDATING_INPUT: {
+    title: "Validating uploaded files",
+    detail: "Checking the CDA, companion PDF, candidate FHIR and reference bundle.",
+    progress: 22,
+  },
+  BUILDING_CASES: {
+    title: "Building the assessment case",
+    detail: "Organising source evidence and the selected deployment contract.",
+    progress: 38,
+  },
+  LOADING_OUTPUTS: {
+    title: "Loading FHIR outputs",
+    detail: "Preparing the candidate and reference bundles for comparison.",
+    progress: 54,
+  },
+  GENERATING_OUTPUTS: {
+    title: "Generating the FHIR output",
+    detail: "Converting the clinical source into the candidate FHIR bundle.",
+    progress: 68,
+  },
+  SCORING: {
+    title: "Scoring deployment readiness",
+    detail: "Applying FHIR checks and the selected organisation requirements.",
+    progress: 86,
+  },
+  COMPLETED: {
+    title: "Finalising the readiness report",
+    detail: "The checks are complete and the report is being prepared.",
+    progress: 98,
+  },
+};
+
+const normaliseWorkflowStage = (stage: string) =>
+  stage.trim().toUpperCase().replace(/\s+/g, "_");
+
+const getWorkflowStageMeta = (stage: string) =>
+  workflowStageMeta[normaliseWorkflowStage(stage) as WorkflowStageId] ?? {
+    title: "Evaluating clinical output",
+    detail: "Processing the uploaded evidence and FHIR bundles.",
+    progress: 18,
+  };
+
 const WorkflowProgress = ({ stage }: { stage: string }) => {
-  const normalized = stage.toUpperCase();
+  const normalized = normaliseWorkflowStage(stage);
   const stageIndex = workflowStages.findIndex(([id]) => id === normalized);
   const activeIndex = stageIndex >= 0 ? stageIndex : 0;
 
   return (
     <div className="workflow-progress" aria-label={`Workflow stage: ${stage}`}>
       {workflowStages.map(([id, label], index) => (
-        <div className={index <= activeIndex ? "complete" : ""} key={id}>
+        <div
+          className={index < activeIndex ? "complete" : index === activeIndex ? "active" : ""}
+          key={id}
+        >
           <span>{index < activeIndex ? <CircleCheck aria-hidden="true" /> : index + 1}</span>
           <small>{label}</small>
         </div>
       ))}
     </div>
+  );
+};
+
+const EvaluationProgressCard = ({
+  stage,
+  profileName,
+}: {
+  stage: string;
+  profileName: string | null;
+}) => {
+  const stageMeta = getWorkflowStageMeta(stage);
+
+  return (
+    <section
+      className="evaluation-loading-card"
+      aria-busy="true"
+      aria-labelledby="evaluation-loading-title"
+      aria-describedby="evaluation-loading-description"
+    >
+      <div className="evaluation-loading-head">
+        <span className="evaluation-loading-icon" aria-hidden="true"><Activity /></span>
+        <div>
+          <span className="eyebrow">Evaluation in progress</span>
+          <h2 id="evaluation-loading-title">{stageMeta.title}</h2>
+          <p id="evaluation-loading-description" aria-live="polite">{stageMeta.detail}</p>
+        </div>
+        <span className="evaluation-loading-value" aria-hidden="true">
+          <strong>{stageMeta.progress}%</strong>
+          <small>workflow</small>
+        </span>
+      </div>
+
+      <div
+        className="evaluation-progress-track"
+        role="progressbar"
+        aria-label="Evaluation progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={stageMeta.progress}
+        aria-valuetext={`${stageMeta.title}, ${stageMeta.progress}%`}
+      >
+        <span style={{ width: `${stageMeta.progress}%` }} />
+      </div>
+
+      <WorkflowProgress stage={stage} />
+
+      <footer className="evaluation-loading-foot">
+        <span><Activity aria-hidden="true" /> Evaluating for {profileName ?? "the selected profile"}</span>
+        <span>Results will appear automatically. No refresh needed.</span>
+      </footer>
+    </section>
   );
 };
 
@@ -1784,6 +1891,7 @@ function App() {
   }, [selectedEvaluation]);
 
   const selectedEvaluationProfile = getDeploymentProfile(selectedEvaluation.deploymentProfileId);
+  const isSelectedEvaluationRunning = selectedEvaluation.status.toUpperCase() === "RUNNING";
   const selectedDecisionPresentation = profileDecisionPresentation(
     selectedEvaluation.decision,
     selectedEvaluationProfile?.name ?? null,
@@ -1848,7 +1956,7 @@ function App() {
   const completedSetupChecks = setupChecks.filter((item) => item.ready).length;
   const canReuseSelectedFiles =
     selectedEvaluation.id === lastSubmittedEvaluationId
-    && selectedEvaluation.status !== "RUNNING"
+    && !isSelectedEvaluationRunning
     && hasCdaSource
     && hasPdfSource
     && hasReferenceFhir
@@ -2641,23 +2749,18 @@ function App() {
                 <div className="head-actions">{runPicker}</div>
               </div>
 
-              {selectedEvaluation.status === "RUNNING" ? (
-                <div className="card progress-card">
-                  <div className="section-heading">
-                    <div>
-                      <span className="eyebrow">Live workflow</span>
-                      <h2 className="card-title">{selectedEvaluation.stage.replace(/_/g, " ")}</h2>
-                    </div>
-                    <StatusPill value="Running" tone="neutral" />
-                  </div>
-                  <WorkflowProgress stage={selectedEvaluation.stage} />
-                </div>
+              {isSelectedEvaluationRunning ? (
+                <EvaluationProgressCard
+                  stage={selectedEvaluation.stage}
+                  profileName={selectedEvaluationProfile?.name ?? null}
+                />
               ) : null}
 
-              <section
-                className={`result-decision tone-${decisionTone[selectedEvaluation.decision]}`}
-                aria-labelledby="result-decision-title"
-              >
+              {!isSelectedEvaluationRunning ? (
+                <section
+                  className={`result-decision tone-${decisionTone[selectedEvaluation.decision]}`}
+                  aria-labelledby="result-decision-title"
+                >
                 <div className="result-decision-copy">
                   <div className="result-decision-label">
                     <span className="result-decision-icon"><SelectedDecisionIcon aria-hidden="true" /></span>
@@ -2704,9 +2807,11 @@ function App() {
                     </dd>
                   </div>
                 </dl>
-              </section>
+                </section>
+              ) : null}
 
-              <div className="result-body">
+              {!isSelectedEvaluationRunning ? (
+                <div className="result-body">
                 <div className="result-main-column">
                   {selectedEvaluation.profileAssessment ? (
                     <section className="result-section profile-result-section" aria-labelledby="profile-requirements-title">
@@ -2884,7 +2989,8 @@ function App() {
                     </button>
                   </details>
                 </aside>
-              </div>
+                </div>
+              ) : null}
             </section>
           )}
         </main>
