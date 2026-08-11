@@ -76,7 +76,6 @@ type ViewId =
 type Theme = "light" | "dark";
 type Severity = "Pass" | "Watch" | "Fail";
 type SeverityFilter = "all" | Severity;
-type ApiState = "checking" | "connected" | "demo";
 type EvidenceTab = "summary" | "candidate" | "reference";
 type RuleId =
   | "hl7_cda_mapping"
@@ -1638,7 +1637,6 @@ function App() {
   const [isLoadingEvaluations, setIsLoadingEvaluations] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(readInitialTheme);
-  const [apiState, setApiState] = useState<ApiState>("checking");
   const [dataSearch, setDataSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
@@ -1668,7 +1666,6 @@ function App() {
             .map(remoteToDashboard)
             .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
 
-          setApiState("connected");
           setEvaluations(dashboardEvaluations);
           if (dashboardEvaluations.length > 0) {
             setSelectedId((current) =>
@@ -1678,7 +1675,6 @@ function App() {
         }
       } catch {
         if (!cancelled) {
-          setApiState("demo");
           setToast("AWS is unavailable. The curated synthetic evaluation remains available.");
         }
       } finally {
@@ -2084,10 +2080,6 @@ function App() {
         </div>
 
         <div className="top-actions">
-          <span className={`live-pill state-${apiState}`}>
-            <span aria-hidden="true" />
-            {apiState === "connected" ? "AWS connected" : apiState === "checking" ? "Connecting" : "Fixture mode"}
-          </span>
           <div className="theme-toggle" role="group" aria-label="Theme">
             <button
               className={theme === "light" ? "active" : ""}
@@ -2166,7 +2158,9 @@ function App() {
               ? "workspace-capability"
               : view === "results"
                 ? "workspace-results"
-                : ""
+                : view === "create"
+                  ? "workspace-create"
+                  : ""
           }`}
         >
           {view === "capability" ? (
