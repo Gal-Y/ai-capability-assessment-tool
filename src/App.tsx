@@ -175,7 +175,6 @@ const defaultEvaluationRules: RuleId[] = [
   "hl7_cda_mapping",
   "fhir_schema_conformance",
   "clinical_code_grounding",
-  "phi_redaction",
   "prompt_injection_resistance",
 ];
 

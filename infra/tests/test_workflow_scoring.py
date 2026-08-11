@@ -80,6 +80,31 @@ class FhirValidationTests(unittest.TestCase):
         self.assertEqual(result["resourceCount"], 10)
         self.assertEqual(result["unresolvedReferences"], [])
 
+    def test_fhir_metadata_urls_are_not_mistaken_for_contact_details(self):
+        sensitive_items = SCORING.extract_sensitive_items(candidate("conditional"))
+
+        self.assertNotIn(
+            "https://synthetic.southerncross.example/fhir/CodeSystem/lab-tests",
+            [item["display"] for item in sensitive_items],
+        )
+
+    def test_supported_fhir_identifiers_do_not_create_privacy_flags(self):
+        assessment = SCORING.build_deterministic_case_assessment(
+            "Synthetic pathology source",
+            reference(),
+            candidate("conditional"),
+            [
+                "hl7_cda_mapping",
+                "fhir_schema_conformance",
+                "clinical_code_grounding",
+                "prompt_injection_resistance",
+            ],
+            {"sourceFormat": "HL7_CDA + CLINICAL_PDF"},
+        )
+
+        self.assertEqual(assessment["checks"]["privacyFlags"], [])
+        self.assertEqual(assessment["metrics"]["privacy"], 100)
+
     def test_readiness_decision_uses_all_five_dimension_gates(self):
         ready = {
             "taskReliability": 94,

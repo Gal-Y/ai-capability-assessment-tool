@@ -297,6 +297,11 @@ FHIR_TERMINOLOGY_URL_PREFIXES = (
     "https://www.w3.org/1999/xhtml",
 )
 
+FHIR_METADATA_URL_FRAGMENTS = (
+    "/fhir/codesystem/",
+    "/fhir/valueset/",
+)
+
 CASE_EVALUATION_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -686,10 +691,13 @@ def extract_sensitive_items(text):
                 r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", display
             ):
                 continue
-            if label == "url" and display.lower().startswith(
-                FHIR_TERMINOLOGY_URL_PREFIXES
-            ):
-                continue
+            if label == "url":
+                lowered_display = display.lower()
+                if lowered_display.startswith(FHIR_TERMINOLOGY_URL_PREFIXES) or any(
+                    fragment in lowered_display
+                    for fragment in FHIR_METADATA_URL_FRAGMENTS
+                ):
+                    continue
             normalized_value = normalize_sensitive_value(label, display)
             if not normalized_value:
                 continue
