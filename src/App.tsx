@@ -50,6 +50,7 @@ import {
   getDeploymentProfile,
   type DeploymentProfileAssessment,
   type DeploymentProfileId,
+  type ProfileRequirementResult,
   type ProfileRequirementStatus,
 } from "./lib/deploymentProfiles";
 import {
@@ -63,6 +64,10 @@ import {
   type PdfOverview,
   type RenderedPdfPage,
 } from "./lib/capability";
+import {
+  buildRequirementEvidence,
+  type RequirementEvidence,
+} from "./lib/requirementEvidence";
 
 type OutputSource = "platform-model" | "uploaded-outputs";
 type Decision = "Ready" | "Conditional" | "Not Ready";
@@ -191,9 +196,28 @@ const demoCandidatePreview = `{
   ]
 }`;
 
-const demoReferencePreview = `Expected resources: Patient, Organization, Practitioner,
-ImagingStudy and DiagnosticReport. The reference structures the reporting organisation,
-radiologist, DICOM Study UID, accession, modality and body site.`;
+const demoReferencePreview = `{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    { "resource": {
+      "resourceType": "ImagingStudy",
+      "id": "imaging-study-001",
+      "identifier": [
+        { "system": "urn:dicom:uid", "value": "urn:oid:1.2.826.0.1.3680043.10.1000.14" },
+        { "type": { "coding": [{ "code": "ACSN" }] }, "value": "HR-26-00184" }
+      ],
+      "modality": [{ "code": "DX", "display": "Digital Radiography" }],
+      "series": [{ "bodySite": { "code": "51185008", "display": "Thoracic structure" } }]
+    } },
+    { "resource": {
+      "resourceType": "DiagnosticReport",
+      "id": "diagnostic-report-001",
+      "performer": [{ "reference": "urn:uuid:organization-harbour-imaging" }],
+      "resultsInterpreter": [{ "reference": "urn:uuid:practitioner-maya-chen" }]
+    } }
+  ]
+}`;
 
 const demoProfile = getDeploymentProfile("gp-clinic")!;
 const demoProfileStatuses: Record<string, ProfileRequirementStatus> = {
@@ -342,6 +366,64 @@ const emptyMetrics: MetricSet = {
   privacy: 0,
   latency: null,
 };
+
+const emptyDimensions: ReadinessDimensions = {
+  taskReliability: 0,
+  privacyContainment: 0,
+  securityRobustness: 0,
+  constraintPerformance: 0,
+  valueUtility: 0,
+};
+
+const pendingFileRefs = (files: File[]): RemoteFileRef[] =>
+  files.map((file) => ({ name: file.name, key: `pending/${file.name}` }));
+
+const buildPendingEvaluation = ({
+  id,
+  createdAt,
+  stage,
+  deploymentProfileId,
+  modelId,
+  documents,
+  referenceOutputs,
+  policyFiles,
+  aiOutputs,
+}: {
+  id: string;
+  createdAt: string;
+  stage: string;
+  deploymentProfileId: DeploymentProfileId;
+  modelId: string;
+  documents: RemoteFileRef[];
+  referenceOutputs: RemoteFileRef[];
+  policyFiles: RemoteFileRef[];
+  aiOutputs: RemoteFileRef[];
+}): DashboardEvaluation => ({
+  id,
+  createdAt,
+  status: stage === "UPLOADING_FILES" ? "UPLOADING" : "RUNNING",
+  stage,
+  capability: "CDA + PDF to FHIR",
+  outputSource: "uploaded-outputs",
+  deploymentProfileId,
+  profileAssessment: null,
+  decision: "Conditional",
+  readinessScore: 0,
+  dimensions: emptyDimensions,
+  dimensionReasons: {},
+  metrics: emptyMetrics,
+  modelId,
+  evaluatorModel: "gpt-5.4-mini",
+  documents,
+  referenceOutputs,
+  policyFiles,
+  aiOutputs,
+  issues: [],
+  strengths: [],
+  cases: [],
+  processingSeconds: null,
+  raw: null,
+});
 
 const deriveDimensions = (metrics: MetricSet): ReadinessDimensions => ({
   taskReliability: metrics.faithfulness * 0.55 + metrics.coverage * 0.45,
@@ -655,56 +737,84 @@ const DimensionRow = ({
   );
 };
 
-const workflowStages = [
-  ["QUEUED", "Queued"],
-  ["VALIDATING_INPUT", "Validate"],
-  ["BUILDING_CASES", "Build case"],
-  ["LOADING_OUTPUTS", "Load output"],
-  ["GENERATING_OUTPUTS", "Generate"],
-  ["SCORING", "Score"],
-  ["COMPLETED", "Complete"],
+const workflowSteps = [
+  "Upload",
+  "Check files",
+  "Build case",
+  "Compare FHIR",
+  "Apply rules",
+  "Report",
 ] as const;
 
-type WorkflowStageId = (typeof workflowStages)[number][0];
+type WorkflowStageId =
+  | "UPLOADING_FILES"
+  | "QUEUED"
+  | "VALIDATING_INPUT"
+  | "BUILDING_CASES"
+  | "LOADING_OUTPUTS"
+  | "GENERATING_OUTPUTS"
+  | "SCORING"
+  | "COMPLETED";
 
 const workflowStageMeta: Record<
   WorkflowStageId,
-  { title: string; detail: string; progress: number }
+  { title: string; detail: string; progress: number; ceiling: number; stepIndex: number }
 > = {
+  UPLOADING_FILES: {
+    title: "Uploading the four demo files",
+    detail: "Sending the CDA, PDF, candidate FHIR and reference FHIR to the evaluation workspace.",
+    progress: 4,
+    ceiling: 16,
+    stepIndex: 0,
+  },
   QUEUED: {
     title: "Preparing evaluation",
-    detail: "Your files are uploaded and the assessment workflow is starting.",
-    progress: 8,
+    detail: "The files are uploaded and the assessment workflow is starting.",
+    progress: 18,
+    ceiling: 27,
+    stepIndex: 1,
   },
   VALIDATING_INPUT: {
-    title: "Validating uploaded files",
-    detail: "Checking the CDA, companion PDF, candidate FHIR and reference bundle.",
-    progress: 22,
+    title: "Checking the uploaded files",
+    detail: "Confirming that the clinical sources and both FHIR bundles can be read.",
+    progress: 28,
+    ceiling: 40,
+    stepIndex: 1,
   },
   BUILDING_CASES: {
     title: "Building the assessment case",
-    detail: "Organising source evidence and the selected organisation requirements.",
-    progress: 38,
+    detail: "Connecting the source evidence to the selected organisation requirements.",
+    progress: 42,
+    ceiling: 54,
+    stepIndex: 2,
   },
   LOADING_OUTPUTS: {
-    title: "Loading FHIR outputs",
-    detail: "Preparing the candidate and reference bundles for comparison.",
-    progress: 54,
+    title: "Comparing the two FHIR bundles",
+    detail: "Reading the candidate and approved reference resource by resource.",
+    progress: 56,
+    ceiling: 70,
+    stepIndex: 3,
   },
   GENERATING_OUTPUTS: {
     title: "Generating the FHIR output",
     detail: "Converting the clinical source into the candidate FHIR bundle.",
-    progress: 68,
+    progress: 58,
+    ceiling: 76,
+    stepIndex: 3,
   },
   SCORING: {
-    title: "Scoring deployment readiness",
-    detail: "Applying FHIR checks and the selected organisation requirements.",
-    progress: 86,
+    title: "Applying the organisation rules",
+    detail: "Checking each requirement and preparing evidence for any field that needs attention.",
+    progress: 74,
+    ceiling: 96,
+    stepIndex: 4,
   },
   COMPLETED: {
     title: "Finalising the readiness report",
-    detail: "The checks are complete and the report is being prepared.",
+    detail: "The checks are complete and the plain-language report is being prepared.",
     progress: 98,
+    ceiling: 99,
+    stepIndex: 5,
   },
 };
 
@@ -715,20 +825,20 @@ const getWorkflowStageMeta = (stage: string) =>
   workflowStageMeta[normaliseWorkflowStage(stage) as WorkflowStageId] ?? {
     title: "Evaluating clinical output",
     detail: "Processing the uploaded evidence and FHIR bundles.",
-    progress: 18,
+    progress: 20,
+    ceiling: 34,
+    stepIndex: 1,
   };
 
 const WorkflowProgress = ({ stage }: { stage: string }) => {
-  const normalized = normaliseWorkflowStage(stage);
-  const stageIndex = workflowStages.findIndex(([id]) => id === normalized);
-  const activeIndex = stageIndex >= 0 ? stageIndex : 0;
+  const activeIndex = getWorkflowStageMeta(stage).stepIndex;
 
   return (
     <div className="workflow-progress" aria-label={`Workflow stage: ${stage}`}>
-      {workflowStages.map(([id, label], index) => (
+      {workflowSteps.map((label, index) => (
         <div
           className={index < activeIndex ? "complete" : index === activeIndex ? "active" : ""}
-          key={id}
+          key={label}
         >
           <span>{index < activeIndex ? <CircleCheck aria-hidden="true" /> : index + 1}</span>
           <small>{label}</small>
@@ -739,13 +849,57 @@ const WorkflowProgress = ({ stage }: { stage: string }) => {
 };
 
 const EvaluationProgressCard = ({
+  evaluationId,
+  startedAt,
   stage,
   profileName,
 }: {
+  evaluationId: string;
+  startedAt: string;
   stage: string;
   profileName: string | null;
 }) => {
   const stageMeta = getWorkflowStageMeta(stage);
+  const [displayedProgress, setDisplayedProgress] = useState(2);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    setDisplayedProgress(2);
+  }, [startedAt]);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => {
+      setDisplayedProgress((current) => Math.max(current, stageMeta.progress));
+    });
+    const intervalId = window.setInterval(() => {
+      setDisplayedProgress((current) => {
+        if (current >= stageMeta.ceiling) return current;
+        const remaining = stageMeta.ceiling - current;
+        return Math.min(stageMeta.ceiling, current + Math.max(0.35, remaining * 0.08));
+      });
+    }, 700);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearInterval(intervalId);
+    };
+  }, [stageMeta.ceiling, stageMeta.progress]);
+
+  useEffect(() => {
+    const updateElapsed = () => {
+      const startedAtMs = Date.parse(startedAt);
+      setElapsedSeconds(Number.isFinite(startedAtMs)
+        ? Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000))
+        : 0);
+    };
+    updateElapsed();
+    const intervalId = window.setInterval(() => {
+      updateElapsed();
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [evaluationId, startedAt]);
+
+  const roundedProgress = Math.floor(displayedProgress);
 
   return (
     <section
@@ -762,8 +916,8 @@ const EvaluationProgressCard = ({
           <p id="evaluation-loading-description" aria-live="polite">{stageMeta.detail}</p>
         </div>
         <span className="evaluation-loading-value" aria-hidden="true">
-          <strong>{stageMeta.progress}%</strong>
-          <small>workflow</small>
+          <strong>{roundedProgress}%</strong>
+          <small>estimated</small>
         </span>
       </div>
 
@@ -773,34 +927,316 @@ const EvaluationProgressCard = ({
         aria-label="Evaluation progress"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={stageMeta.progress}
-        aria-valuetext={`${stageMeta.title}, ${stageMeta.progress}%`}
+        aria-valuenow={roundedProgress}
+        aria-valuetext={`${stageMeta.title}, approximately ${roundedProgress}% complete`}
       >
-        <span style={{ width: `${stageMeta.progress}%` }} />
+        <span style={{ width: `${displayedProgress}%` }} />
       </div>
 
       <WorkflowProgress stage={stage} />
 
       <footer className="evaluation-loading-foot">
         <span><Activity aria-hidden="true" /> Evaluating for {profileName ?? "the selected organisation"}</span>
-        <span>Results will appear automatically. No refresh needed.</span>
+        <span>{elapsedSeconds}s elapsed · Results open automatically</span>
       </footer>
+    </section>
+  );
+};
+
+const requirementStatusRank: Record<ProfileRequirementStatus, number> = {
+  block: 0,
+  review: 1,
+  advisory: 2,
+  pass: 3,
+};
+
+const fieldRoot = (path: string) => path.split(".")[0];
+
+const CandidateResourceCode = ({ evidence }: { evidence: RequirementEvidence }) => {
+  const lines = evidence.candidateCode.split("\n");
+  const firstLine = evidence.candidateLineStart !== null
+    ? Math.max(evidence.candidateLineStart - 1, 1)
+    : 1;
+  const relevantRoots = evidence.relevantFields.map(fieldRoot);
+
+  return (
+    <div className="candidate-resource-code" aria-label={`Candidate FHIR at ${evidence.candidateLocation}`}>
+      {evidence.missingFields.length > 0 ? (
+        <div className="missing-field-banner">
+          <AlertTriangle aria-hidden="true" />
+          <span>Missing here:</span>
+          {evidence.missingFields.map((field) => <code key={field}>{field}</code>)}
+        </div>
+      ) : null}
+      <pre>
+        <code>
+          {lines.map((line, index) => {
+            const isRelevant = relevantRoots.some((field) => line.includes(`"${field}"`));
+            return (
+              <span className={isRelevant ? "candidate-code-line relevant" : "candidate-code-line"} key={`${index}-${line}`}>
+                <span aria-hidden="true">{firstLine + index}</span>
+                <span>{line || " "}</span>
+              </span>
+            );
+          })}
+        </code>
+      </pre>
+    </div>
+  );
+};
+
+const CandidateFullCode = ({
+  candidateText,
+  evidence,
+}: {
+  candidateText: string;
+  evidence: RequirementEvidence | null;
+}) => {
+  const parsedCandidate = parseFhirCandidate(candidateText);
+  const focusedLineRef = useRef<HTMLSpanElement | null>(null);
+  const codeContainerRef = useRef<HTMLPreElement | null>(null);
+
+  useEffect(() => {
+    if (!evidence || !focusedLineRef.current || !codeContainerRef.current) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const focusedLine = focusedLineRef.current;
+      const codeContainer = codeContainerRef.current;
+      if (!focusedLine || !codeContainer) return;
+      const lineBounds = focusedLine.getBoundingClientRect();
+      const containerBounds = codeContainer.getBoundingClientRect();
+      codeContainer.scrollTop += lineBounds.top - containerBounds.top - codeContainer.clientHeight * 0.28;
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [candidateText, evidence?.candidateLocation]);
+
+  if (parsedCandidate.error) {
+    return <pre className="evidence-code"><code>{candidateText}</code></pre>;
+  }
+
+  const lines = parsedCandidate.formatted.split("\n");
+  const resourceStart = evidence?.candidateLineStart ?? null;
+  const resourceLength = evidence?.candidateCode.split("\n").length ?? 0;
+  const resourceEnd = resourceStart === null ? null : resourceStart + resourceLength - 2;
+  const relevantRoots = evidence?.relevantFields.map(fieldRoot) ?? [];
+
+  return (
+    <pre className="evidence-code full-candidate-code" ref={codeContainerRef}>
+      <code>
+        {lines.map((line, index) => {
+          const lineNumber = index + 1;
+          const inFocusedResource = resourceStart !== null
+            && resourceEnd !== null
+            && lineNumber >= resourceStart
+            && lineNumber <= resourceEnd;
+          const isRelevant = relevantRoots.some((field) => line.includes(`"${field}"`));
+          return (
+            <span
+              ref={resourceStart === lineNumber ? focusedLineRef : undefined}
+              key={`${lineNumber}-${line}`}
+            >
+              {resourceStart === lineNumber && (evidence?.missingFields.length ?? 0) > 0 ? (
+                <span className="full-code-annotation">
+                  Missing from this resource: {evidence?.missingFields.join(", ")}
+                </span>
+              ) : null}
+              <span
+                className={`full-candidate-line${inFocusedResource ? " focused" : ""}${isRelevant ? " relevant" : ""}`}
+              >
+                <span aria-hidden="true">{lineNumber}</span>
+                <span>{line || " "}</span>
+              </span>
+            </span>
+          );
+        })}
+      </code>
+    </pre>
+  );
+};
+
+const RequirementEvidenceWorkspace = ({
+  assessment,
+  caseItem,
+  selectedRequirementId,
+  onSelectRequirement,
+  onOpenCandidate,
+}: {
+  assessment: DeploymentProfileAssessment;
+  caseItem: CaseFinding;
+  selectedRequirementId: string | null;
+  onSelectRequirement: (requirementId: string) => void;
+  onOpenCandidate: (requirement: ProfileRequirementResult) => void;
+}) => {
+  const actionable = assessment.requirements
+    .filter((requirement) => requirement.status !== "pass")
+    .sort((left, right) => requirementStatusRank[left.status] - requirementStatusRank[right.status]);
+  const passed = assessment.requirements.filter((requirement) => requirement.status === "pass");
+  const selectedRequirement = actionable.find((requirement) => requirement.id === selectedRequirementId)
+    ?? actionable[0]
+    ?? null;
+  const evidence = selectedRequirement
+    ? buildRequirementEvidence(
+        selectedRequirement,
+        caseItem.candidateText,
+        caseItem.referenceText,
+        assessment.profileName,
+      )
+    : null;
+  const requirementDefinition = getDeploymentProfile(assessment.profileId)?.requirements.find(
+    (requirement) => requirement.id === selectedRequirement?.id,
+  );
+
+  return (
+    <section className="result-section requirement-evidence-section" id="requirement-evidence" aria-labelledby="requirement-evidence-title">
+      <div className="result-section-head requirement-evidence-head">
+        <div>
+          <span className="eyebrow">Decision evidence</span>
+          <h2 id="requirement-evidence-title">Why this decision happened</h2>
+          <p>Select a requirement to see the exact candidate FHIR location and what needs to change.</p>
+        </div>
+        <span className="profile-version-chip">{actionable.length} need attention</span>
+      </div>
+
+      {selectedRequirement && evidence ? (
+        <div className="requirement-evidence-workspace">
+          <div className="requirement-selector" role="group" aria-label="Requirements needing attention">
+            {actionable.map((requirement) => {
+              const meta = profileRequirementMeta[requirement.status];
+              const RequirementIcon = meta.Icon;
+              const itemEvidence = buildRequirementEvidence(
+                requirement,
+                caseItem.candidateText,
+                caseItem.referenceText,
+                assessment.profileName,
+              );
+              const isSelected = requirement.id === selectedRequirement.id;
+              return (
+                <button
+                  className={`requirement-selector-row tone-${meta.tone}${isSelected ? " selected" : ""}`}
+                  type="button"
+                  aria-current={isSelected ? "true" : undefined}
+                  onClick={() => onSelectRequirement(requirement.id)}
+                  key={requirement.id}
+                >
+                  <span className="profile-result-icon"><RequirementIcon aria-hidden="true" /></span>
+                  <span>
+                    <strong>{requirement.label}</strong>
+                    <small>{itemEvidence.finding}</small>
+                    <code>{requirement.evidencePath}</code>
+                  </span>
+                  <span className={`profile-result-status tone-${meta.tone}`}>{meta.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <article className="requirement-detail" aria-live="polite">
+            <header className="requirement-detail-head">
+              <div>
+                <span className="eyebrow">Candidate FHIR evidence</span>
+                <h3>{selectedRequirement.label}</h3>
+              </div>
+              <span className={`profile-result-status tone-${profileRequirementMeta[selectedRequirement.status].tone}`}>
+                {profileRequirementMeta[selectedRequirement.status].label}
+              </span>
+            </header>
+
+            <div className="plain-language-finding">
+              <span>In simple terms</span>
+              <strong>{evidence.finding}</strong>
+            </div>
+
+            <dl className="requirement-explanation-grid">
+              <div>
+                <dt>Organisation rule</dt>
+                <dd>{requirementDefinition?.summary ?? selectedRequirement.detail}</dd>
+              </div>
+              <div>
+                <dt>Why it matters</dt>
+                <dd>{evidence.whyItMatters}</dd>
+              </div>
+              <div>
+                <dt>What would resolve it</dt>
+                <dd>{evidence.howToResolve}</dd>
+              </div>
+            </dl>
+
+            <div className="candidate-location-row">
+              <span><FileJson aria-hidden="true" /> Exact candidate location</span>
+              <code>{evidence.candidateLocation}</code>
+            </div>
+
+            {evidence.parseError ? (
+              <div className="candidate-parse-warning" role="alert">
+                <AlertTriangle aria-hidden="true" />
+                <span>{evidence.parseError} The original candidate response is shown below.</span>
+              </div>
+            ) : null}
+
+            <CandidateResourceCode evidence={evidence} />
+
+            {evidence.expectedCode ? (
+              <details className="expected-fhir-shape">
+                <summary>
+                  <span>Expected fields from the reference FHIR</span>
+                  <ChevronRight aria-hidden="true" />
+                </summary>
+                <pre><code>{evidence.expectedCode}</code></pre>
+              </details>
+            ) : null}
+
+            <button className="open-candidate-action" type="button" onClick={() => onOpenCandidate(selectedRequirement)}>
+              Open full candidate FHIR <ArrowRight aria-hidden="true" />
+            </button>
+          </article>
+        </div>
+      ) : (
+        <div className="result-clear-state requirement-clear-state">
+          <CircleCheck aria-hidden="true" />
+          <span>Every organisation requirement was met by this candidate.</span>
+        </div>
+      )}
+
+      {passed.length > 0 ? (
+        <details className="met-requirements">
+          <summary>
+            <span><CircleCheck aria-hidden="true" /> {passed.length} requirements met</span>
+            <ChevronRight aria-hidden="true" />
+          </summary>
+          <div>
+            {passed.map((requirement) => (
+              <span key={requirement.id}><CircleCheck aria-hidden="true" /> {requirement.label}</span>
+            ))}
+          </div>
+        </details>
+      ) : null}
     </section>
   );
 };
 
 const EvidenceDrawer = ({
   caseItem,
+  focusRequirement,
   tab,
   onTabChange,
   onClose,
 }: {
   caseItem: CaseFinding;
+  focusRequirement: ProfileRequirementResult | null;
   tab: EvidenceTab;
   onTabChange: (tab: EvidenceTab) => void;
   onClose: () => void;
-}) => (
-  <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
+}) => {
+  const focusedEvidence = focusRequirement && caseItem.profileAssessment
+    ? buildRequirementEvidence(
+        focusRequirement,
+        caseItem.candidateText,
+        caseItem.referenceText,
+        caseItem.profileAssessment.profileName,
+      )
+    : null;
+
+  return (
+    <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
     <aside
       className="evidence-drawer"
       role="dialog"
@@ -872,15 +1308,33 @@ const EvidenceDrawer = ({
               </section>
             </div>
           </>
+        ) : tab === "candidate" ? (
+          <>
+            {focusRequirement && focusedEvidence ? (
+              <section className="candidate-focus-card">
+                <div>
+                  <span className="eyebrow">Focused requirement</span>
+                  <h3>{focusRequirement.label}</h3>
+                  <p>{focusedEvidence.finding}</p>
+                </div>
+                <dl>
+                  <div><dt>FHIR location</dt><dd><code>{focusedEvidence.candidateLocation}</code></dd></div>
+                  <div><dt>Missing fields</dt><dd>{focusedEvidence.missingFields.join(", ") || "No field is missing"}</dd></div>
+                </dl>
+              </section>
+            ) : null}
+            <CandidateFullCode candidateText={caseItem.candidateText} evidence={focusedEvidence} />
+          </>
         ) : (
           <pre className="evidence-code">
-            <code>{tab === "candidate" ? caseItem.candidateText : caseItem.referenceText ?? "No reference preview available."}</code>
+            <code>{caseItem.referenceText ?? "No reference preview available."}</code>
           </pre>
         )}
       </div>
     </aside>
-  </div>
-);
+    </div>
+  );
+};
 
 const documentationSections = [
   "Overview",
@@ -1747,6 +2201,10 @@ function App() {
   const [dataSearch, setDataSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [selectedRequirement, setSelectedRequirement] = useState<{
+    evaluationId: string;
+    requirementId: string;
+  } | null>(null);
   const [evidenceTab, setEvidenceTab] = useState<EvidenceTab>("summary");
   const [pendingDelete, setPendingDelete] = useState<DashboardEvaluation | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -1866,6 +2324,13 @@ function App() {
     [selectedCaseId, selectedEvaluation.cases],
   );
 
+  const selectedRequirementId = selectedRequirement?.evaluationId === selectedEvaluation.id
+    ? selectedRequirement.requirementId
+    : null;
+  const focusedRequirement = selectedEvaluation.profileAssessment?.requirements.find(
+    (requirement) => requirement.id === selectedRequirementId,
+  ) ?? null;
+
   const allRuns = useMemo(() => {
     if (isLoadingEvaluations && evaluations.length === 0) {
       return [];
@@ -1891,7 +2356,9 @@ function App() {
   }, [selectedEvaluation]);
 
   const selectedEvaluationProfile = getDeploymentProfile(selectedEvaluation.deploymentProfileId);
-  const isSelectedEvaluationRunning = selectedEvaluation.status.toUpperCase() === "RUNNING";
+  const isSelectedEvaluationRunning = ["RUNNING", "UPLOADING"].includes(
+    selectedEvaluation.status.toUpperCase(),
+  );
   const selectedDecisionPresentation = profileDecisionPresentation(
     selectedEvaluation.decision,
     selectedEvaluationProfile?.name ?? null,
@@ -2075,7 +2542,28 @@ function App() {
       return;
     }
 
+    const pendingId = `uploading-${Date.now()}`;
+    const createdAt = new Date().toISOString();
+    const pendingEvaluation = buildPendingEvaluation({
+      id: pendingId,
+      createdAt,
+      stage: "UPLOADING_FILES",
+      deploymentProfileId: selectedDeploymentProfile.id,
+      modelId,
+      documents: pendingFileRefs(uploads.clinicalBundle),
+      referenceOutputs: pendingFileRefs(uploads.expectedResources),
+      policyFiles: pendingFileRefs(uploads.governancePolicies),
+      aiOutputs: pendingFileRefs(uploads.candidateOutputs),
+    });
+
     setIsSubmitting(true);
+    setEvaluations((current) => [pendingEvaluation, ...current]);
+    setSelectedId(pendingId);
+    setSelectedRequirement(null);
+    setView("results");
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+
+    let startedEvaluationId: string | null = null;
     try {
       const allUploads = await uploadLocalFiles([
         ...uploads.clinicalBundle.map((file) => ({ category: "documents" as const, file })),
@@ -2088,13 +2576,17 @@ function App() {
       ]);
 
       const uploaded = allUploads.uploadedFiles;
+      const documents = toRemoteRefs(uploaded, "documents");
+      const referenceOutputs = toRemoteRefs(uploaded, "referenceOutputs");
+      const policyFiles = toRemoteRefs(uploaded, "policyFiles");
+      const aiOutputs = toRemoteRefs(uploaded, "aiOutputs");
       const response = await startEvaluation({
         capability: "structured_clinical_resource_generation",
         outputSource: "uploaded-outputs",
-        documents: toRemoteRefs(uploaded, "documents"),
-        referenceOutputs: toRemoteRefs(uploaded, "referenceOutputs"),
-        policyFiles: toRemoteRefs(uploaded, "policyFiles"),
-        aiOutputs: toRemoteRefs(uploaded, "aiOutputs"),
+        documents,
+        referenceOutputs,
+        policyFiles,
+        aiOutputs,
         config: {
           modelId,
           evaluationRules: defaultEvaluationRules,
@@ -2106,15 +2598,42 @@ function App() {
         },
       });
 
-      setToast(`Evaluation ${response.evaluationId} started.`);
+      startedEvaluationId = response.evaluationId;
+      const queuedEvaluation = buildPendingEvaluation({
+        id: response.evaluationId,
+        createdAt,
+        stage: "QUEUED",
+        deploymentProfileId: selectedDeploymentProfile.id,
+        modelId,
+        documents,
+        referenceOutputs,
+        policyFiles,
+        aiOutputs,
+      });
+      setEvaluations((current) => [
+        queuedEvaluation,
+        ...current.filter((item) => item.id !== pendingId && item.id !== response.evaluationId),
+      ]);
       setLastSubmittedEvaluationId(response.evaluationId);
       setSelectedId(response.evaluationId);
-      setView("results");
+      setToast("Files uploaded. The organisation requirements are now being applied.");
 
-      const detail = await getEvaluation(response.evaluationId);
-      const dashboardEvaluation = remoteToDashboard(detail.evaluation);
-      setEvaluations((current) => [dashboardEvaluation, ...current.filter((item) => item.id !== dashboardEvaluation.id)]);
+      try {
+        const detail = await getEvaluation(response.evaluationId);
+        const dashboardEvaluation = remoteToDashboard(detail.evaluation);
+        setEvaluations((current) => [
+          dashboardEvaluation,
+          ...current.filter((item) => item.id !== dashboardEvaluation.id),
+        ]);
+      } catch {
+        setToast("Evaluation started. Results will appear automatically when the checks finish.");
+      }
     } catch (error) {
+      setEvaluations((current) => current.filter((item) => item.id !== pendingId));
+      if (!startedEvaluationId) {
+        setSelectedId(demoEvaluation.id);
+        setView("create");
+      }
       setToast(`Could not start evaluation: ${String(error)}`);
     } finally {
       setIsSubmitting(false);
@@ -2709,7 +3228,11 @@ function App() {
                       <button
                         className="table-row"
                         type="button"
-                        onClick={() => { setSelectedCaseId(caseItem.id); setEvidenceTab("summary"); }}
+                        onClick={() => {
+                          setSelectedRequirement(null);
+                          setSelectedCaseId(caseItem.id);
+                          setEvidenceTab("summary");
+                        }}
                         key={caseItem.id}
                       >
                         <span className="case-id">{caseItem.id}</span>
@@ -2751,6 +3274,8 @@ function App() {
 
               {isSelectedEvaluationRunning ? (
                 <EvaluationProgressCard
+                  evaluationId={selectedEvaluation.id}
+                  startedAt={selectedEvaluation.createdAt}
                   stage={selectedEvaluation.stage}
                   profileName={selectedEvaluationProfile?.name ?? null}
                 />
@@ -2773,9 +3298,9 @@ function App() {
                   <h2 id="result-decision-title">{selectedDecisionPresentation.heading}</h2>
                   <p>{selectedDecisionPresentation.summary}</p>
                   <div className="result-decision-actions">
-                    <button className="decision-action" type="button" onClick={() => setView("data")}>
-                      Review evidence <ArrowRight aria-hidden="true" />
-                    </button>
+                    <a className="decision-action" href="#requirement-evidence">
+                      See exactly why <ArrowRight aria-hidden="true" />
+                    </a>
                     {canReuseSelectedFiles ? (
                       <button className="decision-reuse-action" type="button" onClick={reuseSelectedFiles}>
                         <Link2 aria-hidden="true" />
@@ -2813,129 +3338,51 @@ function App() {
               {!isSelectedEvaluationRunning ? (
                 <div className="result-body">
                 <div className="result-main-column">
-                  {selectedEvaluation.profileAssessment ? (
-                    <section className="result-section profile-result-section" aria-labelledby="profile-requirements-title">
+                  {selectedEvaluation.profileAssessment && selectedEvaluation.cases[0] ? (
+                    <RequirementEvidenceWorkspace
+                      assessment={selectedEvaluation.profileAssessment}
+                      caseItem={selectedEvaluation.cases[0]}
+                      selectedRequirementId={selectedRequirementId}
+                      onSelectRequirement={(requirementId) => setSelectedRequirement({
+                        evaluationId: selectedEvaluation.id,
+                        requirementId,
+                      })}
+                      onOpenCandidate={(requirement) => {
+                        setSelectedRequirement({
+                          evaluationId: selectedEvaluation.id,
+                          requirementId: requirement.id,
+                        });
+                        setSelectedCaseId(selectedEvaluation.cases[0].id);
+                        setEvidenceTab("candidate");
+                      }}
+                    />
+                  ) : (
+                    <section className="result-section" aria-labelledby="attention-title">
                       <div className="result-section-head">
                         <div>
-                          <span className="eyebrow">Organisation requirements</span>
-                          <h2 id="profile-requirements-title">{selectedEvaluation.profileAssessment.profileName} requirements</h2>
+                          <span className="eyebrow">Decision evidence</span>
+                          <h2 id="attention-title">What needs attention</h2>
                         </div>
-                        <span className="profile-version-chip">v{selectedEvaluation.profileAssessment.version}</span>
+                        <span className="result-count">{selectedEvaluation.issues.length}</span>
                       </div>
-                      <div className="profile-result-list">
-                        {selectedEvaluation.profileAssessment.requirements.map((requirement) => {
-                          const meta = profileRequirementMeta[requirement.status];
-                          const RequirementIcon = meta.Icon;
-                          return (
-                            <div className={`profile-result-row tone-${meta.tone}`} key={requirement.id}>
-                              <span className="profile-result-icon"><RequirementIcon aria-hidden="true" /></span>
-                              <span className="profile-result-copy">
-                                <strong>{requirement.label}</strong>
-                                <span>{requirement.detail}</span>
-                                <code>{requirement.evidencePath}</code>
-                              </span>
-                              <span className={`profile-result-status tone-${meta.tone}`}>{meta.label}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  ) : null}
-
-                  <section className="result-section" aria-labelledby="attention-title">
-                    <div className="result-section-head">
-                      <div>
-                        <span className="eyebrow">Priority</span>
-                        <h2 id="attention-title">What needs attention</h2>
-                      </div>
-                      <span className="result-count">{selectedEvaluation.issues.length}</span>
-                    </div>
-                    {selectedEvaluation.issues.length > 0 ? (
-                      <>
+                      {selectedEvaluation.issues.length > 0 ? (
                         <ul className="attention-list">
-                          {visibleIssues.map((item) => (
+                          {[...visibleIssues, ...remainingIssues].map((item) => (
                             <li key={item}>
                               <span><AlertTriangle aria-hidden="true" /></span>
                               <p>{item}</p>
                             </li>
                           ))}
                         </ul>
-                        {remainingIssues.length > 0 ? (
-                          <details className="more-issues">
-                            <summary>
-                              <span>Show {remainingIssues.length} more</span>
-                              <ChevronRight aria-hidden="true" />
-                            </summary>
-                            <ul className="attention-list">
-                              {remainingIssues.map((item) => (
-                                <li key={item}>
-                                  <span><AlertTriangle aria-hidden="true" /></span>
-                                  <p>{item}</p>
-                                </li>
-                              ))}
-                            </ul>
-                          </details>
-                        ) : null}
-                      </>
-                    ) : (
-                      <div className="result-clear-state">
-                        <CircleCheck aria-hidden="true" />
-                        <span>No issues require attention.</span>
-                      </div>
-                    )}
-                  </section>
-
-                  <section className="result-section" aria-labelledby="case-review-title">
-                    <div className="result-section-head">
-                      <div>
-                        <span className="eyebrow">Evidence</span>
-                        <h2 id="case-review-title">Case review</h2>
-                      </div>
-                      <button type="button" className="icon-text-action" onClick={() => setView("data")}>
-                        Full evidence <ArrowRight aria-hidden="true" />
-                      </button>
-                    </div>
-                    <div className="result-finding-list">
-                      {selectedEvaluation.cases.length > 0 ? (
-                        selectedEvaluation.cases.map((caseItem) => (
-                          <button
-                            className="result-finding-row"
-                            type="button"
-                            onClick={() => { setSelectedCaseId(caseItem.id); setEvidenceTab("summary"); }}
-                            key={caseItem.id}
-                          >
-                            <SeverityBadge severity={caseItem.severity} />
-                            <span className="result-finding-copy">
-                              <strong>{caseItem.target}</strong>
-                              <span>{caseItem.finding}</span>
-                              <small>{caseItem.id} · {caseItem.source}</small>
-                            </span>
-                            <ChevronRight aria-hidden="true" />
-                          </button>
-                        ))
                       ) : (
                         <div className="result-clear-state">
                           <CircleCheck aria-hidden="true" />
-                          <span>No case findings were recorded.</span>
+                          <span>No issues require attention.</span>
                         </div>
                       )}
-                    </div>
-                  </section>
+                    </section>
+                  )}
 
-                  <details className="result-disclosure result-success">
-                    <summary>
-                      <span><CircleCheck aria-hidden="true" /><strong>What passed</strong></span>
-                      <small>{selectedEvaluation.strengths.length} strengths</small>
-                      <ChevronRight aria-hidden="true" />
-                    </summary>
-                    <ul className="result-strength-list">
-                      {selectedEvaluation.strengths.length > 0 ? (
-                        selectedEvaluation.strengths.map((item) => <li key={item}>{item}</li>)
-                      ) : (
-                        <li>No strengths recorded yet.</li>
-                      )}
-                    </ul>
-                  </details>
                 </div>
 
                 <aside className="result-sidebar" aria-label="Readiness details">
@@ -2999,9 +3446,13 @@ function App() {
       {selectedCase ? (
         <EvidenceDrawer
           caseItem={selectedCase}
+          focusRequirement={focusedRequirement}
           tab={evidenceTab}
           onTabChange={setEvidenceTab}
-          onClose={() => setSelectedCaseId(null)}
+          onClose={() => {
+            setSelectedCaseId(null);
+            setSelectedRequirement(null);
+          }}
         />
       ) : null}
 
