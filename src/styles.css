@@ -4621,6 +4621,10 @@ button.table-row:hover {
   grid-template-rows: 68px 38px minmax(0, 1fr);
 }
 
+.fhir-document-pane > .document-empty {
+  grid-row: 2 / -1;
+}
+
 .resource-detail {
   max-width: 180px;
   overflow: hidden;
