@@ -55,10 +55,16 @@ class FhirValidationTests(unittest.TestCase):
         self.assertTrue(result["parsed"])
         self.assertTrue(result["valid"])
         self.assertEqual(result["score"], 100)
-        self.assertEqual(result["resourceCount"], 3)
+        self.assertEqual(result["resourceCount"], 5)
         self.assertEqual(
             result["resourceTypes"],
-            ["DiagnosticReport", "ImagingStudy", "Patient"],
+            [
+                "DiagnosticReport",
+                "ImagingStudy",
+                "Organization",
+                "Patient",
+                "Practitioner",
+            ],
         )
         self.assertEqual(result["unresolvedReferences"], [])
 
@@ -154,11 +160,25 @@ class FhirValidationTests(unittest.TestCase):
     def test_fhir_dates_and_terminology_urls_are_not_phi(self):
         items = SCORING.extract_sensitive_items(
             '"effectiveDateTime":"2026-07-30T09:00:00+10:00",'
-            '"system":"http://loinc.org"'
+            '"system":"http://loinc.org",'
+            '"div":"<div xmlns=\\"http://www.w3.org/1999/xhtml\\"><p>Report</p></div>"'
         )
 
         self.assertFalse(any(item["label"] == "phone number" for item in items))
         self.assertFalse(any(item["label"] == "url" for item in items))
+
+    def test_synthetic_source_supported_identifiers_receive_privacy_floor(self):
+        assessment = {
+            "metrics": {"privacy": 100},
+            "checks": {"privacyFlags": []},
+        }
+
+        self.assertEqual(
+            SCORING.get_synthetic_privacy_score_floor(
+                "SYNTHETIC - NOT FOR CLINICAL USE", assessment
+            ),
+            98,
+        )
 
 if __name__ == "__main__":
     unittest.main()

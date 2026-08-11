@@ -24,6 +24,41 @@
       }
     },
     {
+      "fullUrl": "urn:uuid:organization-harbour-imaging",
+      "resource": {
+        "resourceType": "Organization",
+        "id": "organization-harbour-imaging",
+        "identifier": [
+          {
+            "system": "urn:synthetic:organization-id",
+            "value": "SYN-HDI"
+          }
+        ],
+        "name": "Harbour Diagnostic Imaging"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:practitioner-maya-chen",
+      "resource": {
+        "resourceType": "Practitioner",
+        "id": "practitioner-maya-chen",
+        "name": [
+          {
+            "family": "Chen",
+            "given": ["Maya"],
+            "prefix": ["Dr"]
+          }
+        ],
+        "qualification": [
+          {
+            "code": {
+              "text": "FRANZCR"
+            }
+          }
+        ]
+      }
+    },
+    {
       "fullUrl": "urn:uuid:imaging-study-001",
       "resource": {
         "resourceType": "ImagingStudy",

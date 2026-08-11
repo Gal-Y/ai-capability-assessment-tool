@@ -173,6 +173,8 @@ const demoCandidatePreview = `{
   "type": "collection",
   "entry": [
     { "resource": { "resourceType": "Patient", "id": "patient-syn-rad-001" } },
+    { "resource": { "resourceType": "Organization", "id": "organization-harbour-imaging" } },
+    { "resource": { "resourceType": "Practitioner", "id": "practitioner-maya-chen" } },
     { "resource": {
       "resourceType": "ImagingStudy",
       "id": "imaging-study-001",
@@ -313,8 +315,8 @@ const demoEvaluation: DashboardEvaluation = {
         parsed: true,
         valid: true,
         score: 100,
-        resourceTypes: ["DiagnosticReport", "ImagingStudy", "Patient"],
-        resourceCount: 3,
+        resourceTypes: ["DiagnosticReport", "ImagingStudy", "Organization", "Patient", "Practitioner"],
+        resourceCount: 5,
         errors: [],
         warnings: [],
         unresolvedReferences: [],

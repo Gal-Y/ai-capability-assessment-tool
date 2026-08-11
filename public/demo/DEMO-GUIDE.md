@@ -21,10 +21,10 @@ No supporting-policy file is needed. The selected organisation supplies its vers
 
 ## Controlled conversion gap
 
-The candidate is clinically faithful and retains the full report as readable FHIR narrative. It also links a minimal ImagingStudy. However, it does not map the following information into dedicated structured fields:
+The candidate is clinically faithful, retains the full report as readable FHIR narrative, and creates Patient, Organization, Practitioner, ImagingStudy and DiagnosticReport resources. However, it leaves these relationships and imaging facts unstructured:
 
-- `DiagnosticReport.performer`
-- `DiagnosticReport.resultsInterpreter`
+- `DiagnosticReport.performer` linking the reporting organisation
+- `DiagnosticReport.resultsInterpreter` linking the radiologist
 - DICOM UID and accession identifiers in `ImagingStudy.identifier`
 - `ImagingStudy.modality`
 - `ImagingStudy.series.bodySite`
