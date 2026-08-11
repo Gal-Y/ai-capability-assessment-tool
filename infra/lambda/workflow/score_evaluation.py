@@ -66,17 +66,38 @@ SUPPORTED_FHIR_RESOURCE_TYPES = {
     "Patient",
     "Practitioner",
     "Procedure",
+    "Specimen",
 }
 
 DEPLOYMENT_PROFILES = {
-    "hospital": {
-        "name": "Hospital",
-        "version": "2.0",
-        "purpose": "Own CDA/PDF-to-FHIR conversion",
+    "pathology-report": {
+        "name": "Pathology report",
+        "version": "3.0",
+        "purpose": "CDA/PDF-to-FHIR capability benchmark",
         "requirements": [
             {
-                "id": "clinical-report-core",
-                "label": "Core report resources",
+                "id": "pathology-core-resources",
+                "label": "Core pathology resources",
+                "severity": "block",
+            },
+            {
+                "id": "pathology-result-coverage",
+                "label": "Complete result panel",
+                "severity": "block",
+            },
+            {
+                "id": "pathology-clinical-truth",
+                "label": "Exact clinical values",
+                "severity": "block",
+            },
+            {
+                "id": "standard-pathology-terminology",
+                "label": "Standard terminology",
+                "severity": "review",
+            },
+            {
+                "id": "specimen-traceability",
+                "label": "Specimen traceability",
                 "severity": "block",
             },
             {
@@ -91,112 +112,8 @@ DEPLOYMENT_PROFILES = {
             },
             {
                 "id": "report-interpretation",
-                "label": "Readable impression",
+                "label": "Readable interpretation",
                 "severity": "block",
-            },
-            {
-                "id": "structured-report-source",
-                "label": "Structured report source",
-                "severity": "advisory",
-            },
-            {
-                "id": "imaging-identifiers",
-                "label": "Structured imaging identifiers",
-                "severity": "advisory",
-            },
-        ],
-    },
-    "gp-clinic": {
-        "name": "GP clinic",
-        "version": "2.0",
-        "purpose": "Own CDA/PDF-to-FHIR conversion",
-        "requirements": [
-            {
-                "id": "clinical-report-core",
-                "label": "Core report resources",
-                "severity": "block",
-            },
-            {
-                "id": "report-interpretation",
-                "label": "Readable impression",
-                "severity": "block",
-            },
-            {
-                "id": "structured-report-source",
-                "label": "Structured report source",
-                "severity": "review",
-            },
-            {
-                "id": "resolved-references",
-                "label": "Resolved references",
-                "severity": "block",
-            },
-            {
-                "id": "final-report-status",
-                "label": "Final report status",
-                "severity": "block",
-            },
-            {
-                "id": "source-report-access",
-                "label": "Original report access",
-                "severity": "review",
-            },
-            {
-                "id": "imaging-identifiers",
-                "label": "Structured imaging identifiers",
-                "severity": "advisory",
-            },
-        ],
-    },
-    "radiology-practice": {
-        "name": "Radiology practice",
-        "version": "2.0",
-        "purpose": "Own CDA/PDF-to-FHIR conversion",
-        "requirements": [
-            {
-                "id": "radiology-core-resources",
-                "label": "Radiology resources",
-                "severity": "block",
-            },
-            {
-                "id": "imaging-study-link",
-                "label": "Linked imaging study",
-                "severity": "block",
-            },
-            {
-                "id": "imaging-identifiers",
-                "label": "DICOM and accession IDs",
-                "severity": "block",
-            },
-            {
-                "id": "imaging-context",
-                "label": "Modality and body site",
-                "severity": "block",
-            },
-            {
-                "id": "structured-report-source",
-                "label": "Structured report source",
-                "severity": "block",
-            },
-            {
-                "id": "report-interpretation",
-                "label": "Readable impression",
-                "severity": "block",
-            },
-            {
-                "id": "resolved-references",
-                "label": "Resolved references",
-                "severity": "block",
-            },
-            {
-                "id": "final-report-status",
-                "label": "Final report status",
-                "severity": "block",
-            },
-            {
-                "id": "source-report-access",
-                "label": "Original report access",
-                "severity": "review",
             },
         ],
     },
@@ -852,6 +769,9 @@ def get_detected_fhir_resources(candidate_text):
         "AllergyIntolerance",
         "Encounter",
         "Procedure",
+        "Specimen",
+        "Organization",
+        "Practitioner",
         "Bundle",
     ]
 
@@ -1063,7 +983,112 @@ def resource_display(resource, index):
     return f"{resource_type}/{resource_id}"
 
 
-def assess_profile_requirement(requirement_id, payload, resources, validation):
+def normalise_pathology_label(value):
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def pathology_observation_label(observation):
+    code = observation.get("code") if isinstance(observation.get("code"), dict) else {}
+    text = str(code.get("text") or "").strip()
+    if text:
+        return text
+    for coding in code.get("coding", []):
+        if isinstance(coding, dict) and str(coding.get("display") or "").strip():
+            return str(coding["display"]).strip()
+    return str(observation.get("id") or "Unnamed result")
+
+
+def pathology_observation_tokens(observation):
+    tokens = set()
+    observation_id = normalise_pathology_label(observation.get("id"))
+    if observation_id:
+        tokens.add(f"id:{observation_id}")
+
+    code = observation.get("code") if isinstance(observation.get("code"), dict) else {}
+    code_text = normalise_pathology_label(code.get("text"))
+    if code_text:
+        tokens.add(f"label:{code_text}")
+    for coding in code.get("coding", []):
+        if not isinstance(coding, dict):
+            continue
+        system = str(coding.get("system") or "").strip().lower()
+        value = str(coding.get("code") or "").strip().lower()
+        display = normalise_pathology_label(coding.get("display"))
+        if system and value:
+            tokens.add(f"code:{system}|{value}")
+        if display:
+            tokens.add(f"label:{display}")
+    return tokens
+
+
+def match_pathology_observations(candidate_observations, reference_observations):
+    matches = []
+    used_candidate_indexes = set()
+    for reference in reference_observations:
+        reference_tokens = pathology_observation_tokens(reference)
+        ranked = []
+        for index, candidate in enumerate(candidate_observations):
+            if index in used_candidate_indexes:
+                continue
+            shared = reference_tokens & pathology_observation_tokens(candidate)
+            if not shared:
+                continue
+            score = max(
+                3 if token.startswith("code:") else 2 if token.startswith("label:") else 1
+                for token in shared
+            )
+            ranked.append((score, index, candidate))
+        if not ranked:
+            matches.append((reference, None))
+            continue
+        _score, candidate_index, candidate = max(ranked, key=lambda item: item[0])
+        used_candidate_indexes.add(candidate_index)
+        matches.append((reference, candidate))
+    return matches
+
+
+def patient_identifiers(patient):
+    return {
+        (
+            str(identifier.get("system") or "").strip().lower(),
+            str(identifier.get("value") or "").strip().lower(),
+        )
+        for identifier in patient.get("identifier", [])
+        if isinstance(identifier, dict) and str(identifier.get("value") or "").strip()
+    }
+
+
+def clinical_values_match(reference_value, candidate_value):
+    if isinstance(reference_value, (int, float)) and isinstance(
+        candidate_value, (int, float)
+    ):
+        return abs(float(reference_value) - float(candidate_value)) < 0.000001
+    return str(reference_value or "").strip() == str(candidate_value or "").strip()
+
+
+def resource_reference_variants(payload, resource):
+    resource_type = str(resource.get("resourceType") or "").strip()
+    resource_id = str(resource.get("id") or "").strip()
+    variants = {f"{resource_type}/{resource_id}"} if resource_type and resource_id else set()
+    if not isinstance(payload, dict) or payload.get("resourceType") != "Bundle":
+        return variants
+    for entry in payload.get("entry", []):
+        if not isinstance(entry, dict) or entry.get("resource") is not resource:
+            continue
+        full_url = str(entry.get("fullUrl") or "").strip()
+        if full_url:
+            variants.add(full_url)
+    return variants
+
+
+def assess_profile_requirement(
+    requirement_id,
+    payload,
+    resources,
+    validation,
+    reference_resources=None,
+):
+    reference_resources = reference_resources or []
     resource_types = {
         str(resource.get("resourceType"))
         for resource in resources
@@ -1074,40 +1099,243 @@ def assess_profile_requirement(requirement_id, payload, resources, validation):
         for resource in resources
         if resource.get("resourceType") == "DiagnosticReport"
     ]
-    imaging_studies = [
+    observations = [
         resource
         for resource in resources
-        if resource.get("resourceType") == "ImagingStudy"
+        if resource.get("resourceType") == "Observation"
+    ]
+    specimens = [
+        resource for resource in resources if resource.get("resourceType") == "Specimen"
+    ]
+    patients = [
+        resource for resource in resources if resource.get("resourceType") == "Patient"
+    ]
+    reference_observations = [
+        resource
+        for resource in reference_resources
+        if resource.get("resourceType") == "Observation"
+    ]
+    reference_patients = [
+        resource
+        for resource in reference_resources
+        if resource.get("resourceType") == "Patient"
     ]
 
-    if requirement_id == "clinical-report-core":
-        required = {"Patient", "DiagnosticReport"}
+    if requirement_id == "pathology-core-resources":
+        required = {"Patient", "Specimen", "DiagnosticReport", "Observation"}
         missing = sorted(required - resource_types)
         if missing:
             return (
                 False,
-                "Missing required FHIR resources: " + ", ".join(missing) + ".",
+                "Missing required pathology resources: " + ", ".join(missing) + ".",
                 "Bundle.entry.resource.resourceType",
             )
         return (
             True,
-            "Patient and DiagnosticReport resources are present.",
+            "Patient, Specimen, DiagnosticReport and Observation resources are present.",
             "Bundle.entry.resource.resourceType",
         )
 
-    if requirement_id == "radiology-core-resources":
-        required = {"Patient", "DiagnosticReport", "ImagingStudy"}
-        missing = sorted(required - resource_types)
-        if missing:
+    if requirement_id == "pathology-result-coverage":
+        if not reference_observations:
             return (
                 False,
-                "Missing required radiology resources: " + ", ".join(missing) + ".",
-                "Bundle.entry.resource.resourceType",
+                "The approved benchmark contains no Observation resources to compare.",
+                "Reference Bundle.entry.resource",
+            )
+        matches = match_pathology_observations(observations, reference_observations)
+        missing_labels = [
+            pathology_observation_label(reference)
+            for reference, candidate in matches
+            if candidate is None
+        ]
+        if missing_labels:
+            return (
+                False,
+                "Missing benchmark result(s): " + ", ".join(missing_labels) + ".",
+                "DiagnosticReport.result / Observation.code",
+            )
+        report_result_references = {
+            str(item.get("reference") or "").strip()
+            for report in diagnostic_reports
+            for item in report.get("result", [])
+            if isinstance(item, dict) and str(item.get("reference") or "").strip()
+        }
+        unlinked_labels = [
+            pathology_observation_label(reference)
+            for reference, candidate in matches
+            if candidate is not None
+            and not (
+                resource_reference_variants(payload, candidate)
+                & report_result_references
+            )
+        ]
+        if unlinked_labels:
+            return (
+                False,
+                "Result Observation(s) are present but not included in DiagnosticReport.result: "
+                + ", ".join(unlinked_labels)
+                + ".",
+                "DiagnosticReport.result",
             )
         return (
             True,
-            "Patient, DiagnosticReport and ImagingStudy resources are present.",
-            "Bundle.entry.resource.resourceType",
+            f"All {len(reference_observations)} benchmark pathology results are represented.",
+            "DiagnosticReport.result / Observation.code",
+        )
+
+    if requirement_id == "pathology-clinical-truth":
+        if not reference_observations or not reference_patients:
+            return (
+                False,
+                "Clinical truth cannot be checked because the approved benchmark is incomplete.",
+                "Reference Patient / Observation",
+            )
+        if not patients:
+            return False, "The candidate has no Patient resource.", "Patient.identifier"
+
+        expected_identifiers = patient_identifiers(reference_patients[0])
+        candidate_identifiers = patient_identifiers(patients[0])
+        if not expected_identifiers or not (expected_identifiers & candidate_identifiers):
+            return (
+                False,
+                "Patient identity does not match the approved benchmark.",
+                "Patient.identifier",
+            )
+
+        matches = match_pathology_observations(observations, reference_observations)
+        for reference, candidate in matches:
+            label = pathology_observation_label(reference)
+            if candidate is None:
+                return (
+                    False,
+                    f"{label} is missing, so its clinical value cannot be checked.",
+                    f"Observation.valueQuantity ({label})",
+                )
+            expected_quantity = reference.get("valueQuantity")
+            candidate_quantity = candidate.get("valueQuantity")
+            if not isinstance(expected_quantity, dict) or not isinstance(
+                candidate_quantity, dict
+            ):
+                return (
+                    False,
+                    f"{label} does not preserve the expected quantity value.",
+                    f"Observation.valueQuantity ({label})",
+                )
+            expected_value = expected_quantity.get("value")
+            candidate_value = candidate_quantity.get("value")
+            expected_unit = str(
+                expected_quantity.get("unit") or expected_quantity.get("code") or ""
+            ).strip()
+            candidate_unit = str(
+                candidate_quantity.get("unit") or candidate_quantity.get("code") or ""
+            ).strip()
+            if not clinical_values_match(expected_value, candidate_value):
+                return (
+                    False,
+                    (
+                        f"{label} value differs from the approved benchmark: expected "
+                        f"{expected_value} {expected_unit}, candidate has "
+                        f"{candidate_value} {candidate_unit}."
+                    ),
+                    f"Observation.valueQuantity.value ({label})",
+                )
+            if normalise_pathology_label(expected_unit) != normalise_pathology_label(
+                candidate_unit
+            ):
+                return (
+                    False,
+                    (
+                        f"{label} unit differs from the approved benchmark: expected "
+                        f"{expected_unit}, candidate has {candidate_unit or 'no unit'}."
+                    ),
+                    f"Observation.valueQuantity.unit ({label})",
+                )
+        return (
+            True,
+            "Patient identity and every pathology value and unit match the approved benchmark.",
+            "Patient.identifier / Observation.valueQuantity",
+        )
+
+    if requirement_id == "standard-pathology-terminology":
+        local_code_results = []
+        non_ucum_results = []
+        for observation in observations:
+            label = pathology_observation_label(observation)
+            code = observation.get("code")
+            codings = code.get("coding", []) if isinstance(code, dict) else []
+            has_loinc = any(
+                isinstance(coding, dict)
+                and coding.get("system") == "http://loinc.org"
+                and bool(str(coding.get("code") or "").strip())
+                for coding in codings
+            )
+            if not has_loinc:
+                local_code_results.append(label)
+
+            quantity = observation.get("valueQuantity")
+            if isinstance(quantity, dict) and quantity.get("system") != "http://unitsofmeasure.org":
+                non_ucum_results.append(label)
+
+        issues = []
+        if local_code_results:
+            issues.append(
+                "local test codes instead of LOINC for "
+                + ", ".join(local_code_results[:4])
+            )
+        if non_ucum_results:
+            issues.append(
+                "non-UCUM units for " + ", ".join(non_ucum_results[:4])
+            )
+        if issues:
+            return (
+                False,
+                "Clinical facts are intact, but the candidate uses "
+                + " and ".join(issues)
+                + ". Receiving systems may not reliably recognise these results.",
+                "Observation.code.coding.system / valueQuantity.system",
+            )
+        return (
+            True,
+            "Every pathology test uses LOINC and every quantity declares the UCUM system.",
+            "Observation.code.coding.system / valueQuantity.system",
+        )
+
+    if requirement_id == "specimen-traceability":
+        if not specimens:
+            return False, "No Specimen resource is present.", "Specimen"
+        specimen = specimens[0]
+        if not specimen.get("subject") or not specimen.get("type"):
+            return (
+                False,
+                "The Specimen does not identify both its patient and specimen type.",
+                "Specimen.subject / type",
+            )
+        unlinked_results = [
+            pathology_observation_label(observation)
+            for observation in observations
+            if not observation.get("specimen")
+        ]
+        if unlinked_results:
+            return (
+                False,
+                "Result(s) are not linked to the specimen: "
+                + ", ".join(unlinked_results[:4])
+                + ".",
+                "Observation.specimen",
+            )
+        if not diagnostic_reports or not any(
+            bool(report.get("specimen")) for report in diagnostic_reports
+        ):
+            return (
+                False,
+                "DiagnosticReport is not linked to the tested specimen.",
+                "DiagnosticReport.specimen",
+            )
+        return (
+            True,
+            "The report and every result remain linked to the patient specimen.",
+            "Specimen.subject / Observation.specimen / DiagnosticReport.specimen",
         )
 
     if requirement_id == "resolved-references":
@@ -1174,150 +1402,28 @@ def assess_profile_requirement(requirement_id, payload, resources, validation):
             "DiagnosticReport.conclusion / presentedForm / text",
         )
 
-    if requirement_id == "structured-report-source":
-        has_report_actor = any(
-            bool(report.get("performer")) or bool(report.get("resultsInterpreter"))
-            for report in diagnostic_reports
-        )
-        if not has_report_actor:
-            return (
-                False,
-                "DiagnosticReport does not structure the report source as a performer or results interpreter.",
-                "DiagnosticReport.performer / resultsInterpreter",
-            )
-        return (
-            True,
-            "DiagnosticReport identifies report responsibility through performer or resultsInterpreter.",
-            "DiagnosticReport.performer / resultsInterpreter",
-        )
-
-    if requirement_id == "source-report-access":
-        has_attachment = any(
-            any(
-                isinstance(attachment, dict)
-                and any(attachment.get(field) for field in ("data", "url", "title"))
-                for attachment in report.get("presentedForm", [])
-            )
-            for report in diagnostic_reports
-        )
-        if not has_attachment:
-            return (
-                False,
-                "DiagnosticReport does not retain an accessible issued report attachment.",
-                "DiagnosticReport.presentedForm",
-            )
-        return (
-            True,
-            "DiagnosticReport retains the issued report through presentedForm.",
-            "DiagnosticReport.presentedForm",
-        )
-
-    if requirement_id == "imaging-study-link":
-        has_link = bool(imaging_studies) and any(
-            bool(report.get("imagingStudy")) for report in diagnostic_reports
-        )
-        if not has_link:
-            return (
-                False,
-                "DiagnosticReport does not reference the corresponding ImagingStudy.",
-                "DiagnosticReport.imagingStudy",
-            )
-        return (
-            True,
-            "DiagnosticReport references an ImagingStudy in the candidate Bundle.",
-            "DiagnosticReport.imagingStudy",
-        )
-
-    if requirement_id == "imaging-identifiers":
-        identifiers = [
-            identifier
-            for study in imaging_studies
-            for identifier in study.get("identifier", [])
-            if isinstance(identifier, dict)
-        ]
-        has_dicom_uid = any(
-            identifier.get("system") == "urn:dicom:uid"
-            and bool(str(identifier.get("value", "")).strip())
-            for identifier in identifiers
-        )
-        has_accession = any(
-            any(
-                isinstance(coding, dict) and coding.get("code") == "ACSN"
-                for coding in (
-                    identifier.get("type", {}).get("coding", [])
-                    if isinstance(identifier.get("type"), dict)
-                    else []
-                )
-            )
-            and bool(str(identifier.get("value", "")).strip())
-            for identifier in identifiers
-        )
-        missing = []
-        if not has_dicom_uid:
-            missing.append("DICOM Study UID")
-        if not has_accession:
-            missing.append("accession number")
-        if missing:
-            return (
-                False,
-                "ImagingStudy is missing structured " + " and ".join(missing) + ".",
-                "ImagingStudy.identifier",
-            )
-        return (
-            True,
-            "ImagingStudy retains both DICOM Study UID and accession identifiers.",
-            "ImagingStudy.identifier",
-        )
-
-    if requirement_id == "imaging-context":
-        has_modality = any(
-            bool(study.get("modality"))
-            or any(
-                isinstance(series, dict) and bool(series.get("modality"))
-                for series in study.get("series", [])
-            )
-            for study in imaging_studies
-        )
-        has_body_site = any(
-            any(
-                isinstance(series, dict) and bool(series.get("bodySite"))
-                for series in study.get("series", [])
-            )
-            for study in imaging_studies
-        )
-        missing = []
-        if not has_modality:
-            missing.append("modality")
-        if not has_body_site:
-            missing.append("body site")
-        if missing:
-            return (
-                False,
-                "ImagingStudy is missing structured " + " and ".join(missing) + ".",
-                "ImagingStudy.modality / series.bodySite",
-            )
-        return (
-            True,
-            "ImagingStudy retains structured modality and body-site metadata.",
-            "ImagingStudy.modality / series.bodySite",
-        )
-
     return False, "This profile requirement is not implemented.", requirement_id
 
 
-def evaluate_deployment_profile(candidate_text, profile_id):
+def evaluate_deployment_profile(candidate_text, profile_id, reference_text=None):
     profile = DEPLOYMENT_PROFILES.get(str(profile_id or "").strip())
     if not profile:
         raise ValueError(f"Unsupported deployment profile: {profile_id}")
 
     payload = parse_candidate_json(candidate_text)
     resources = get_fhir_resources(payload)
+    reference_payload = parse_candidate_json(reference_text) if reference_text else None
+    reference_resources = get_fhir_resources(reference_payload)
     validation = validate_fhir_candidate(candidate_text)
     requirement_results = []
 
     for requirement in profile["requirements"]:
         passed, detail, evidence_path = assess_profile_requirement(
-            requirement["id"], payload, resources, validation
+            requirement["id"],
+            payload,
+            resources,
+            validation,
+            reference_resources,
         )
         status = "pass" if passed else requirement["severity"]
         requirement_results.append(
@@ -2195,7 +2301,9 @@ def handler(event, _context):
         deployment_profile_assessment = None
         if deployment_profile_id:
             deployment_profile_assessment = evaluate_deployment_profile(
-                candidate_summary_text, deployment_profile_id
+                candidate_summary_text,
+                deployment_profile_id,
+                reference_text,
             )
             deterministic_assessment["checks"]["deploymentProfile"] = (
                 deployment_profile_assessment

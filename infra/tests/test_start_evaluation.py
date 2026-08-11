@@ -107,25 +107,23 @@ class StartEvaluationApiTests(unittest.TestCase):
         self.assertEqual(result["statusCode"], 400)
         self.assertIn("Unsupported deployment profile", result["body"])
 
-    def test_demo_organisation_profiles_are_accepted(self):
-        for profile_id in ("hospital", "gp-clinic", "radiology-practice"):
-            with self.subTest(profile_id=profile_id):
-                event = request(
-                    "uploaded-outputs",
-                    reference_outputs=[
-                        {"name": "reference.json", "key": "reference/reference.json"}
-                    ],
-                    ai_outputs=[
-                        {"name": "candidate.json", "key": "outputs/candidate.json"}
-                    ],
-                )
-                payload = json.loads(event["body"])
-                payload["config"]["deploymentProfileId"] = profile_id
-                event["body"] = json.dumps(payload)
+    def test_pathology_benchmark_is_accepted(self):
+        event = request(
+            "uploaded-outputs",
+            reference_outputs=[
+                {"name": "reference.json", "key": "reference/reference.json"}
+            ],
+            ai_outputs=[
+                {"name": "candidate.json", "key": "outputs/candidate.json"}
+            ],
+        )
+        payload = json.loads(event["body"])
+        payload["config"]["deploymentProfileId"] = "pathology-report"
+        event["body"] = json.dumps(payload)
 
-                result = START.handler(event, None)
+        result = START.handler(event, None)
 
-                self.assertEqual(result["statusCode"], 202)
+        self.assertEqual(result["statusCode"], 202)
 
 
 if __name__ == "__main__":

@@ -1,17 +1,44 @@
 {
-  "name": "Controlled synthetic radiology CDA and PDF bundle",
-  "version": "2.0.0",
-  "synthetic": true,
-  "description": "One deliberately messy radiology report and one clinically faithful but structurally incomplete FHIR candidate for sequential organisation-requirements evaluation.",
-  "files": {
-    "clinicalBundle": [
-      "/demo/synthetic-radiology-cda.xml",
-      "/demo/synthetic-radiology-report.pdf"
-    ],
-    "reference": [
-      "/demo/reference/expected-radiology-fhir-bundle.json"
-    ],
-    "policy": [],
-    "candidate": "/demo/candidates/controlled-radiology-fhir-bundle.json"
+  "defaultScenario": "conditional",
+  "scenarios": {
+    "ready": {
+      "label": "Ready",
+      "files": {
+        "clinicalBundle": [
+          "/demo/01-ready/1-source-pathology-cda.xml",
+          "/demo/01-ready/2-source-pathology-report.pdf"
+        ],
+        "reference": [
+          "/demo/01-ready/3-reference-fhir.json"
+        ],
+        "candidate": "/demo/01-ready/4-candidate-ready-fhir.json"
+      }
+    },
+    "conditional": {
+      "label": "Conditional",
+      "files": {
+        "clinicalBundle": [
+          "/demo/02-conditional/1-source-pathology-cda.xml",
+          "/demo/02-conditional/2-source-pathology-report.pdf"
+        ],
+        "reference": [
+          "/demo/02-conditional/3-reference-fhir.json"
+        ],
+        "candidate": "/demo/02-conditional/4-candidate-conditional-fhir.json"
+      }
+    },
+    "notReady": {
+      "label": "Not Ready",
+      "files": {
+        "clinicalBundle": [
+          "/demo/03-not-ready/1-source-pathology-cda.xml",
+          "/demo/03-not-ready/2-source-pathology-report.pdf"
+        ],
+        "reference": [
+          "/demo/03-not-ready/3-reference-fhir.json"
+        ],
+        "candidate": "/demo/03-not-ready/4-candidate-not-ready-fhir.json"
+      }
+    }
   }
 }

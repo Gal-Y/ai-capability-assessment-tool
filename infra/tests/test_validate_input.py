@@ -30,8 +30,8 @@ def base_event(output_source):
         "evaluationId": "eval-test",
         "outputSource": output_source,
         "documents": [
-            {"name": "synthetic-radiology-cda.xml", "key": "documents/cda.xml"},
-            {"name": "synthetic-radiology-report.pdf", "key": "documents/report.pdf"},
+            {"name": "source-pathology-cda.xml", "key": "documents/cda.xml"},
+            {"name": "source-pathology-report.pdf", "key": "documents/report.pdf"},
         ],
         "referenceOutputs": [],
         "policyFiles": [],

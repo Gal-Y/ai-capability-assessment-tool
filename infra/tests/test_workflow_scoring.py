@@ -36,34 +36,38 @@ def load_scoring_module():
 SCORING = load_scoring_module()
 
 
-def candidate():
-    return (
-        ROOT / "public/demo/candidates/controlled-radiology-fhir-bundle.json"
-    ).read_text()
+def candidate(scenario="ready"):
+    paths = {
+        "ready": ROOT / "public/demo/01-ready/4-candidate-ready-fhir.json",
+        "conditional": ROOT
+        / "public/demo/02-conditional/4-candidate-conditional-fhir.json",
+        "not-ready": ROOT
+        / "public/demo/03-not-ready/4-candidate-not-ready-fhir.json",
+    }
+    return paths[scenario].read_text()
 
 
 def reference():
-    return (
-        ROOT / "public/demo/reference/expected-radiology-fhir-bundle.json"
-    ).read_text()
+    return (ROOT / "public/demo/01-ready/3-reference-fhir.json").read_text()
 
 
 class FhirValidationTests(unittest.TestCase):
-    def test_controlled_candidate_is_structurally_valid(self):
+    def test_ready_candidate_is_structurally_valid(self):
         result = SCORING.validate_fhir_candidate(candidate())
 
         self.assertTrue(result["parsed"])
         self.assertTrue(result["valid"])
         self.assertEqual(result["score"], 100)
-        self.assertEqual(result["resourceCount"], 5)
+        self.assertEqual(result["resourceCount"], 10)
         self.assertEqual(
             result["resourceTypes"],
             [
                 "DiagnosticReport",
-                "ImagingStudy",
+                "Observation",
                 "Organization",
                 "Patient",
                 "Practitioner",
+                "Specimen",
             ],
         )
         self.assertEqual(result["unresolvedReferences"], [])
@@ -73,7 +77,7 @@ class FhirValidationTests(unittest.TestCase):
 
         self.assertTrue(result["valid"])
         self.assertEqual(result["score"], 100)
-        self.assertEqual(result["resourceCount"], 5)
+        self.assertEqual(result["resourceCount"], 10)
         self.assertEqual(result["unresolvedReferences"], [])
 
     def test_readiness_decision_uses_all_five_dimension_gates(self):
@@ -93,7 +97,7 @@ class FhirValidationTests(unittest.TestCase):
         )
         self.assertEqual(SCORING.build_decision(blocked)[0], "Not Ready")
 
-    def test_same_candidate_has_profile_specific_deployment_decisions(self):
+    def test_three_complete_candidates_produce_distinct_readiness_decisions(self):
         dimensions = {
             "taskReliability": 94,
             "privacyContainment": 99,
@@ -101,61 +105,67 @@ class FhirValidationTests(unittest.TestCase):
             "constraintPerformance": 91,
             "valueUtility": 93,
         }
-        expected = {
-            "hospital": "Ready",
-            "gp-clinic": "Conditional",
-            "radiology-practice": "Not Ready",
-        }
+        expected = {"ready": "Ready", "conditional": "Conditional", "not-ready": "Not Ready"}
 
-        for profile_id, expected_decision in expected.items():
-            with self.subTest(profile_id=profile_id):
+        for scenario, expected_decision in expected.items():
+            with self.subTest(scenario=scenario):
                 assessment = SCORING.evaluate_deployment_profile(
-                    candidate(), profile_id
+                    candidate(scenario), "pathology-report", reference()
+                )
+                coverage = next(
+                    item
+                    for item in assessment["requirements"]
+                    if item["id"] == "pathology-result-coverage"
                 )
                 decision, _score = SCORING.build_decision(
                     dimensions,
                     review_finding_count=assessment["reviewCount"],
                     blocking_finding_count=assessment["blockingCount"],
                 )
+                self.assertEqual(coverage["status"], "pass")
                 self.assertEqual(decision, expected_decision)
 
     def test_profile_findings_point_to_specific_fhir_fields(self):
-        gp_assessment = SCORING.evaluate_deployment_profile(
-            candidate(), "gp-clinic"
+        conditional_assessment = SCORING.evaluate_deployment_profile(
+            candidate("conditional"), "pathology-report", reference()
         )
-        radiology_assessment = SCORING.evaluate_deployment_profile(
-            candidate(), "radiology-practice"
-        )
-
-        gp_report_source = next(
-            item
-            for item in gp_assessment["requirements"]
-            if item["id"] == "structured-report-source"
-        )
-        radiology_identifiers = next(
-            item
-            for item in radiology_assessment["requirements"]
-            if item["id"] == "imaging-identifiers"
-        )
-        radiology_context = next(
-            item
-            for item in radiology_assessment["requirements"]
-            if item["id"] == "imaging-context"
+        not_ready_assessment = SCORING.evaluate_deployment_profile(
+            candidate("not-ready"), "pathology-report", reference()
         )
 
-        self.assertEqual(gp_report_source["status"], "review")
-        self.assertIn("DiagnosticReport.performer", gp_report_source["evidencePath"])
-        self.assertEqual(radiology_identifiers["status"], "block")
-        self.assertIn("ImagingStudy.identifier", radiology_identifiers["evidencePath"])
-        self.assertEqual(radiology_context["status"], "block")
-        self.assertIn("ImagingStudy.modality", radiology_context["evidencePath"])
+        terminology = next(
+            item
+            for item in conditional_assessment["requirements"]
+            if item["id"] == "standard-pathology-terminology"
+        )
+        conditional_truth = next(
+            item
+            for item in conditional_assessment["requirements"]
+            if item["id"] == "pathology-clinical-truth"
+        )
+        clinical_truth = next(
+            item
+            for item in not_ready_assessment["requirements"]
+            if item["id"] == "pathology-clinical-truth"
+        )
 
-    def test_hospital_accepts_the_controlled_candidate_with_advisories_only(self):
-        assessment = SCORING.evaluate_deployment_profile(candidate(), "hospital")
+        self.assertEqual(terminology["status"], "review")
+        self.assertIn("Observation.code.coding.system", terminology["evidencePath"])
+        self.assertEqual(conditional_truth["status"], "pass")
+        self.assertEqual(clinical_truth["status"], "block")
+        self.assertIn("expected 6.2", clinical_truth["detail"])
+        self.assertIn("candidate has 4.2", clinical_truth["detail"])
+        self.assertIn("Observation.valueQuantity.value", clinical_truth["evidencePath"])
+
+    def test_ready_candidate_meets_the_entire_pathology_benchmark(self):
+        assessment = SCORING.evaluate_deployment_profile(
+            candidate(), "pathology-report", reference()
+        )
 
         self.assertEqual(assessment["reviewCount"], 0)
         self.assertEqual(assessment["blockingCount"], 0)
-        self.assertEqual(assessment["advisoryCount"], 2)
+        self.assertEqual(assessment["advisoryCount"], 0)
+        self.assertEqual(assessment["passCount"], 8)
 
     def test_fhir_dates_and_terminology_urls_are_not_phi(self):
         items = SCORING.extract_sensitive_items(

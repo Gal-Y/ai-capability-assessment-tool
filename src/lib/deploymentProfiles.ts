@@ -1,7 +1,4 @@
-export type DeploymentProfileId =
-  | "hospital"
-  | "gp-clinic"
-  | "radiology-practice";
+export type DeploymentProfileId = "pathology-report";
 
 export type ProfileRequirementSeverity = "advisory" | "review" | "block";
 export type ProfileRequirementStatus = "pass" | ProfileRequirementSeverity;
@@ -44,175 +41,69 @@ export type DeploymentProfileAssessment = {
   blockingCount: number;
 };
 
-export const deploymentProfiles: DeploymentProfile[] = [
-  {
-    id: "hospital",
-    name: "Hospital",
-    shortName: "Hospital",
-    version: "2.0",
-    purpose: "Own CDA/PDF-to-FHIR conversion",
-    level: "Balanced acceptance",
-    requirements: [
-      {
-        id: "clinical-report-core",
-        label: "Core report resources",
-        summary: "Patient and DiagnosticReport are required.",
-        severity: "block",
-      },
-      {
-        id: "resolved-references",
-        label: "Resolved references",
-        summary: "Every internal FHIR reference must resolve.",
-        severity: "block",
-      },
-      {
-        id: "final-report-status",
-        label: "Final report status",
-        summary: "The DiagnosticReport must be final.",
-        severity: "block",
-      },
-      {
-        id: "report-interpretation",
-        label: "Readable impression",
-        summary: "The report must retain a readable conclusion or narrative.",
-        severity: "block",
-      },
-      {
-        id: "structured-report-source",
-        label: "Structured report source",
-        summary: "Missing performer or interpreter references are advisory.",
-        severity: "advisory",
-      },
-      {
-        id: "imaging-identifiers",
-        label: "Structured imaging identifiers",
-        summary: "Missing DICOM or accession identifiers are advisory.",
-        severity: "advisory",
-      },
-    ],
-  },
-  {
-    id: "gp-clinic",
-    name: "GP clinic",
-    shortName: "GP",
-    version: "2.0",
-    purpose: "Own CDA/PDF-to-FHIR conversion",
-    level: "Traceability required",
-    requirements: [
-      {
-        id: "clinical-report-core",
-        label: "Core report resources",
-        summary: "Patient and DiagnosticReport are required.",
-        severity: "block",
-      },
-      {
-        id: "report-interpretation",
-        label: "Readable impression",
-        summary: "The DiagnosticReport must retain a readable conclusion.",
-        severity: "block",
-      },
-      {
-        id: "structured-report-source",
-        label: "Structured report source",
-        summary: "A performer or results interpreter must identify the report source.",
-        severity: "review",
-      },
-      {
-        id: "resolved-references",
-        label: "Resolved references",
-        summary: "Every internal FHIR reference must resolve.",
-        severity: "block",
-      },
-      {
-        id: "final-report-status",
-        label: "Final report status",
-        summary: "The DiagnosticReport must be final.",
-        severity: "block",
-      },
-      {
-        id: "source-report-access",
-        label: "Original report access",
-        summary: "The issued PDF or equivalent report attachment must remain accessible.",
-        severity: "review",
-      },
-      {
-        id: "imaging-identifiers",
-        label: "Structured imaging identifiers",
-        summary: "Missing DICOM or accession identifiers are advisory.",
-        severity: "advisory",
-      },
-    ],
-  },
-  {
-    id: "radiology-practice",
-    name: "Radiology practice",
-    shortName: "Radiology",
-    version: "2.0",
-    purpose: "Own CDA/PDF-to-FHIR conversion",
-    level: "Imaging metadata required",
-    requirements: [
-      {
-        id: "radiology-core-resources",
-        label: "Radiology resources",
-        summary: "Patient, DiagnosticReport and ImagingStudy are required.",
-        severity: "block",
-      },
-      {
-        id: "imaging-study-link",
-        label: "Linked imaging study",
-        summary: "The report must reference the corresponding ImagingStudy.",
-        severity: "block",
-      },
-      {
-        id: "imaging-identifiers",
-        label: "DICOM and accession IDs",
-        summary: "The ImagingStudy must retain a DICOM UID and accession number.",
-        severity: "block",
-      },
-      {
-        id: "imaging-context",
-        label: "Modality and body site",
-        summary: "Structured modality and body-site data are required.",
-        severity: "block",
-      },
-      {
-        id: "structured-report-source",
-        label: "Structured report source",
-        summary: "Performer and interpreter references must identify report responsibility.",
-        severity: "block",
-      },
-      {
-        id: "report-interpretation",
-        label: "Readable impression",
-        summary: "The DiagnosticReport must retain a readable conclusion.",
-        severity: "block",
-      },
-      {
-        id: "resolved-references",
-        label: "Resolved references",
-        summary: "Every internal FHIR reference must resolve.",
-        severity: "block",
-      },
-      {
-        id: "final-report-status",
-        label: "Final report status",
-        summary: "The DiagnosticReport must be final.",
-        severity: "block",
-      },
-      {
-        id: "source-report-access",
-        label: "Original report access",
-        summary: "The issued PDF or equivalent report attachment must remain accessible.",
-        severity: "review",
-      },
-    ],
-  },
-];
+export const pathologyProfile: DeploymentProfile = {
+  id: "pathology-report",
+  name: "Pathology report",
+  shortName: "Pathology",
+  version: "3.0",
+  purpose: "CDA/PDF-to-FHIR capability benchmark",
+  level: "Clinical truth and interoperability",
+  requirements: [
+    {
+      id: "pathology-core-resources",
+      label: "Core pathology resources",
+      summary: "Patient, Specimen, DiagnosticReport and Observation resources are required.",
+      severity: "block",
+    },
+    {
+      id: "pathology-result-coverage",
+      label: "Complete result panel",
+      summary: "Every benchmark pathology result must be represented in FHIR.",
+      severity: "block",
+    },
+    {
+      id: "pathology-clinical-truth",
+      label: "Exact clinical values",
+      summary: "Values, units and patient identity must match the approved benchmark.",
+      severity: "block",
+    },
+    {
+      id: "standard-pathology-terminology",
+      label: "Standard terminology",
+      summary: "Pathology tests should use LOINC and quantities should use UCUM.",
+      severity: "review",
+    },
+    {
+      id: "specimen-traceability",
+      label: "Specimen traceability",
+      summary: "Results must stay linked to the correct patient and specimen.",
+      severity: "block",
+    },
+    {
+      id: "resolved-references",
+      label: "Resolved references",
+      summary: "Every internal FHIR reference must resolve.",
+      severity: "block",
+    },
+    {
+      id: "final-report-status",
+      label: "Final report status",
+      summary: "The issued DiagnosticReport must be final.",
+      severity: "block",
+    },
+    {
+      id: "report-interpretation",
+      label: "Readable interpretation",
+      summary: "The report must retain a readable clinical conclusion.",
+      severity: "block",
+    },
+  ],
+};
+
+export const deploymentProfiles: DeploymentProfile[] = [pathologyProfile];
 
 export const isDeploymentProfileId = (value: unknown): value is DeploymentProfileId =>
-  deploymentProfiles.some((profile) => profile.id === value);
+  value === pathologyProfile.id;
 
 export const getDeploymentProfile = (value: unknown): DeploymentProfile | null =>
-  isDeploymentProfileId(value)
-    ? deploymentProfiles.find((profile) => profile.id === value) ?? null
-    : null;
+  isDeploymentProfileId(value) ? pathologyProfile : null;

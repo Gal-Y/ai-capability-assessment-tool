@@ -8,13 +8,13 @@ The product is no longer framed as a generic enterprise AI assessment tool. It i
 - converting supporting unstructured clinical notes into HL7 FHIR resources
 - mapping clinical text to ICD-10, SNOMED CT, and LOINC concepts
 - evaluating candidate JSON bundles before they are written to systems such as AWS HealthLake
-- producing a deployment-readiness decision for a healthcare organisation
+- producing an evidence-backed deployment-readiness decision
 
 ## Product Focus
 
 This is an evaluation tool, not the production converter itself.
 
-A production pipeline might use deterministic CDA mappings for clinical context and AI to extract PDF-only report content into FHIR JSON. This prototype evaluates whether that conversion capability is ready for a specific organisation:
+A production pipeline might use deterministic CDA mappings for clinical context and AI to extract PDF-only pathology results into FHIR JSON. This prototype evaluates that specific conversion capability:
 
 1. upload synthetic HL7 CDA/PDF clinical inputs and expected FHIR outputs
 2. generate or upload candidate AI outputs
@@ -22,26 +22,26 @@ A production pipeline might use deterministic CDA mappings for clinical context 
 4. surface case-level evidence and mitigation gaps
 5. categorise the capability as `Ready`, `Conditional`, or `Not Ready`
 
-Each evaluation assesses one organisation's own CDA/PDF-to-FHIR converter against a versioned
-set of requirements. In the demo, the source evidence, complete reference, and controlled
-candidate stay fixed. Only the organisation requirements change, showing that technical accuracy
-is necessary but deployment readiness is context-dependent.
+Every evaluation uses the same versioned pathology benchmark. The demo contains three controlled
+candidates while the source CDA, companion PDF and approved reference stay fixed:
 
-The prototype includes three built-in profiles:
+- `Ready`: every result is complete, clinically exact and encoded with LOINC and UCUM
+- `Conditional`: every clinical fact is complete and correct, but local laboratory codes require LOINC mapping
+- `Not Ready`: the FHIR is complete and structurally valid, but potassium is changed from 6.2 to 4.2 mmol/L
 
-- `Hospital`: accepts a clinically faithful report while treating missing structured imaging metadata as advisory
-- `GP clinic`: requires report-source traceability, so the same output needs review
-- `Radiology practice`: requires structured DICOM/accession identifiers, modality, body site, and reporting responsibility, so the same output is blocked
+This separation proves that completeness, clinical accuracy and interoperability are related but
+not interchangeable.
 
 ## Readiness Dimensions
 
 The current implementation maps the backend's hybrid metrics to the Thesis A framework:
 
 - `Task reliability`: source-grounded CDA/PDF clinical facts, FHIR shape, values, dates, and units
-- `Clinical coverage`: expected resources, code mappings, and required fields
-- `Security and governance`: prompt-injection resistance and configured deployment constraints
-- `Privacy containment`: PHI, identifiers, contact details, and sensitive leakage
-- `Operational constraints`: latency and workflow usability, shown in run metadata
+- `Privacy containment`: unnecessary PHI and sensitive leakage
+- `Security robustness`: prompt-injection resistance and configured constraints
+- `Constraint performance`: latency and workflow practicality
+- `Value and utility`: whether the result is useful for controlled review
+- the fixed pathology benchmark separately checks result coverage, exact values and units, terminology, specimen traceability, FHIR references, report status and interpretation
 
 ## HL7 Scope
 
@@ -57,13 +57,13 @@ The workflow now records an `inputProfile` during validation. The profile classi
 
 The app includes:
 
-- a redesigned dark healthcare operator console
-- a thesis-ready synthetic chest X-ray demo for a CDA/PDF-to-FHIR pipeline
-- a three-step, upload-first evaluation flow: profile, case files, run
-- uploads for clinical bundles, expected structured outputs, governance policies, and candidate AI outputs
-- one organisation requirement set per evaluation, with a sequential “evaluate the same files for another profile” path
-- organisation-controlled rules for core resources, FHIR references, report interpretation, provenance, imaging identifiers, modality, body site, attachments, and status
-- an HL7 CDA mapping rule that checks whether CDA-style source content is represented as appropriate FHIR resources, including Patient, DiagnosticReport, and ImagingStudy for the radiology demo
+- a focused healthcare operator console with Dashboard, Evaluations, Candidate generator and Assessment method navigation
+- three thesis-ready pathology upload packs for Ready, Conditional and Not Ready outcomes
+- a two-step, upload-first evaluation flow: case files, then run
+- uploads for the CDA/PDF source bundle, approved FHIR reference and candidate FHIR output
+- one fixed pathology benchmark per evaluation
+- deterministic checks for core resources, complete result coverage, exact clinical values, LOINC/UCUM terminology, specimen traceability, FHIR references, report interpretation and final status
+- source-linked explanations that identify the exact candidate resource and field behind each finding
 - case-level evidence cards and mitigation queue
 - AWS-backed evaluation jobs through the existing API, Step Functions, Lambda, S3, and DynamoDB stack
 
@@ -94,15 +94,15 @@ The CDK stack keeps the original serverless shape:
 
 ### Workflow
 
-1. User selects one organisation's requirements and uploads the synthetic radiology files through presigned S3 URLs.
+1. User uploads one synthetic pathology pack through presigned S3 URLs.
 2. User starts an evaluation through the API.
 3. Step Functions runs the pipeline:
    - validate input manifest
    - classify uploaded files and persist the HL7 CDA-to-FHIR `inputProfile`
    - build one clinical test case per source document
    - generate platform output or load uploaded candidate output
-   - score each case against source, reference FHIR output, baseline HL7/FHIR rules, and policy context
-   - apply the selected profile's deterministic deployment requirements and severity levels
+   - score each case against source, reference FHIR output, and baseline HL7/FHIR rules
+   - apply the fixed pathology benchmark and its review/block severity levels
    - persist final readiness report and status
 
 ### API Endpoints

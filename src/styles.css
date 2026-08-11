@@ -887,6 +887,48 @@ svg {
   color: var(--accent-ink);
 }
 
+.evaluation-failure-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  min-height: 180px;
+  padding: 28px;
+  border-color: color-mix(in srgb, var(--bad) 28%, var(--line));
+}
+
+.evaluation-failure-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  color: var(--bad-text);
+}
+
+.evaluation-failure-icon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.evaluation-failure-card h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.evaluation-failure-card p {
+  margin: 5px 0;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.evaluation-failure-card small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .workflow-progress {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -2617,6 +2659,77 @@ button.table-row:hover {
   font-weight: 650;
 }
 
+.fixed-benchmark-card {
+  grid-template-columns: minmax(300px, 0.85fr) minmax(520px, 1.4fr);
+  align-items: center;
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 28%, var(--surface));
+}
+
+.fixed-benchmark-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 15px;
+}
+
+.fixed-benchmark-copy .profile-select-icon {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.fixed-benchmark-copy .profile-select-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.fixed-benchmark-copy p {
+  max-width: 520px;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.benchmark-check-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.benchmark-check-grid > span {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 1px 8px;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.benchmark-check-grid svg {
+  grid-row: 1 / span 2;
+  width: 18px;
+  height: 18px;
+  margin-top: 4px;
+  color: var(--accent-ink);
+}
+
+.benchmark-check-grid strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.benchmark-check-grid small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
 .mode-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2684,6 +2797,10 @@ button.table-row:hover {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+.create-plane .file-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .file-card {
@@ -2785,6 +2902,18 @@ button.table-row:hover {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.create-plane .file-body strong {
+  overflow: visible;
+  line-height: 1.25;
+  text-overflow: unset;
+  white-space: normal;
+}
+
+.create-plane .file-action {
+  padding-inline: 9px;
+  font-size: 13px;
 }
 
 .file-body small {
@@ -4957,6 +5086,14 @@ button.table-row:hover {
   .fhir-explorer {
     grid-template-columns: 220px minmax(0, 1fr);
   }
+
+  .fixed-benchmark-card {
+    grid-template-columns: 1fr;
+  }
+
+  .create-plane .file-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -5128,8 +5265,13 @@ button.table-row:hover {
   .profile-selector-grid,
   .mode-cards,
   .file-grid,
+  .create-plane .file-grid,
   .rule-grid,
   .drawer-two-up {
+    grid-template-columns: 1fr;
+  }
+
+  .benchmark-check-grid {
     grid-template-columns: 1fr;
   }
 
@@ -5255,6 +5397,16 @@ button.table-row:hover {
     align-items: flex-start;
     flex-direction: column;
     gap: 6px;
+  }
+
+  .evaluation-failure-card {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 22px 18px;
+  }
+
+  .evaluation-failure-card .primary-action {
+    grid-column: 1 / -1;
+    justify-content: center;
   }
 
   .create-footer {

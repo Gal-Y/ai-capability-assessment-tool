@@ -5,13 +5,20 @@ export type DemoUploadState = {
   candidateOutputs: File[];
 };
 
-type DemoManifest = {
+export type DemoScenarioId = "ready" | "conditional" | "notReady";
+
+type DemoScenario = {
+  label: string;
   files: {
     clinicalBundle: string[];
     reference: string[];
-    policy: string[];
     candidate: string;
   };
+};
+
+type DemoManifest = {
+  defaultScenario: DemoScenarioId;
+  scenarios: Record<DemoScenarioId, DemoScenario>;
 };
 
 const fileNameFromPath = (path: string) => {
@@ -31,19 +38,26 @@ const fetchAsFile = async (path: string): Promise<File> => {
   });
 };
 
-export const loadDemoDataset = async (): Promise<DemoUploadState> => {
+export const loadDemoDataset = async (
+  scenarioId?: DemoScenarioId,
+): Promise<DemoUploadState> => {
   const response = await fetch("/demo/manifest.json");
   if (!response.ok) {
     throw new Error("Demo manifest is unavailable");
   }
 
   const manifest = (await response.json()) as DemoManifest;
+  const scenario = manifest.scenarios[scenarioId ?? manifest.defaultScenario];
+  if (!scenario) {
+    throw new Error("Demo scenario is unavailable");
+  }
+
   const [clinicalBundle, expectedResources, governancePolicies, candidateOutputs] =
     await Promise.all([
-      Promise.all(manifest.files.clinicalBundle.map(fetchAsFile)),
-      Promise.all(manifest.files.reference.map(fetchAsFile)),
-      Promise.all(manifest.files.policy.map(fetchAsFile)),
-      Promise.all([fetchAsFile(manifest.files.candidate)]),
+      Promise.all(scenario.files.clinicalBundle.map(fetchAsFile)),
+      Promise.all(scenario.files.reference.map(fetchAsFile)),
+      Promise.resolve([]),
+      Promise.all([fetchAsFile(scenario.files.candidate)]),
     ]);
 
   return {

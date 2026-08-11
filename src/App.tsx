@@ -46,8 +46,8 @@ import {
 } from "./lib/api";
 import { loadDemoDataset } from "./lib/demo";
 import {
-  deploymentProfiles,
   getDeploymentProfile,
+  pathologyProfile,
   type DeploymentProfileAssessment,
   type DeploymentProfileId,
   type ProfileRequirementResult,
@@ -179,65 +179,91 @@ const defaultEvaluationRules: RuleId[] = [
   "prompt_injection_resistance",
 ];
 
-const demoCandidatePreview = `{
-  "resourceType": "Bundle",
-  "type": "collection",
-  "entry": [
-    { "resource": { "resourceType": "Patient", "id": "patient-syn-rad-001" } },
-    { "resource": { "resourceType": "Organization", "id": "organization-harbour-imaging" } },
-    { "resource": { "resourceType": "Practitioner", "id": "practitioner-maya-chen" } },
-    { "resource": {
-      "resourceType": "ImagingStudy",
-      "id": "imaging-study-001",
-      "status": "available",
-      "started": "2026-08-11T10:14:00+10:00"
-    } },
-    { "resource": {
-      "resourceType": "DiagnosticReport",
-      "status": "final",
-      "imagingStudy": [{ "reference": "urn:uuid:imaging-study-001" }],
-      "conclusion": "No acute cardiopulmonary abnormality.",
-      "presentedForm": [{ "contentType": "application/pdf" }]
-    } }
-  ]
-}`;
+const demoPathologyResults = [
+  { id: "potassium", label: "Potassium", loinc: "2823-3", local: "CHEM-K", value: 6.2, unit: "mmol/L", interpretation: "Critical high" },
+  { id: "hba1c", label: "Haemoglobin A1c", loinc: "4548-4", local: "DIAB-A1C", value: 7.8, unit: "%", interpretation: "High" },
+  { id: "glucose", label: "Glucose", loinc: "14749-6", local: "CHEM-GLU", value: 8.6, unit: "mmol/L", interpretation: "High" },
+  { id: "egfr", label: "eGFR (CKD-EPI 2021)", loinc: "98979-8", local: "RENAL-EGFR", value: 82, unit: "mL/min/1.73 m2", interpretation: "Normal" },
+] as const;
 
-const demoReferencePreview = `{
-  "resourceType": "Bundle",
-  "type": "collection",
-  "entry": [
-    { "resource": {
-      "resourceType": "ImagingStudy",
-      "id": "imaging-study-001",
-      "identifier": [
-        { "system": "urn:dicom:uid", "value": "urn:oid:1.2.826.0.1.3680043.10.1000.14" },
-        { "type": { "coding": [{ "code": "ACSN" }] }, "value": "HR-26-00184" }
-      ],
-      "modality": [{ "code": "DX", "display": "Digital Radiography" }],
-      "series": [{ "bodySite": { "code": "51185008", "display": "Thoracic structure" } }]
-    } },
-    { "resource": {
-      "resourceType": "DiagnosticReport",
-      "id": "diagnostic-report-001",
-      "performer": [{ "reference": "urn:uuid:organization-harbour-imaging" }],
-      "resultsInterpreter": [{ "reference": "urn:uuid:practitioner-maya-chen" }]
-    } }
-  ]
-}`;
+const buildDemoPreviewBundle = (standardTerminology: boolean) => ({
+  resourceType: "Bundle",
+  type: "collection",
+  entry: [
+    {
+      resource: {
+        resourceType: "Patient",
+        id: "patient-syn-path-001",
+        identifier: [{ system: "https://synthetic.example/mrn", value: "SYN-PATH-001" }],
+      },
+    },
+    {
+      resource: {
+        resourceType: "Specimen",
+        id: "specimen-serum",
+        status: "available",
+        type: { text: "Serum" },
+        subject: { reference: "Patient/patient-syn-path-001" },
+      },
+    },
+    ...demoPathologyResults.map((result) => ({
+      resource: {
+        resourceType: "Observation",
+        id: `obs-${result.id}`,
+        status: "final",
+        code: {
+          coding: [{
+            system: standardTerminology
+              ? "http://loinc.org"
+              : "https://synthetic.example/fhir/CodeSystem/lab-tests",
+            code: standardTerminology ? result.loinc : result.local,
+            display: result.label,
+          }],
+          text: result.label,
+        },
+        subject: { reference: "Patient/patient-syn-path-001" },
+        specimen: { reference: "Specimen/specimen-serum" },
+        valueQuantity: {
+          value: result.value,
+          unit: result.unit,
+          system: "http://unitsofmeasure.org",
+        },
+        interpretation: [{ text: result.interpretation }],
+      },
+    })),
+    {
+      resource: {
+        resourceType: "DiagnosticReport",
+        id: "diagnostic-report-pathology",
+        status: "final",
+        code: { text: "Integrated pathology report" },
+        subject: { reference: "Patient/patient-syn-path-001" },
+        specimen: [{ reference: "Specimen/specimen-serum" }],
+        result: demoPathologyResults.map((result) => ({
+          reference: `Observation/obs-${result.id}`,
+        })),
+        conclusion: "Critical hyperkalaemia (potassium 6.2 mmol/L). HbA1c and glucose are above range.",
+      },
+    },
+  ],
+});
 
-const demoProfile = getDeploymentProfile("gp-clinic")!;
+const demoCandidatePreview = JSON.stringify(buildDemoPreviewBundle(false), null, 2);
+const demoReferencePreview = JSON.stringify(buildDemoPreviewBundle(true), null, 2);
+
+const demoProfile = pathologyProfile;
 const demoProfileStatuses: Record<string, ProfileRequirementStatus> = {
-  "structured-report-source": "review",
-  "imaging-identifiers": "advisory",
+  "standard-pathology-terminology": "review",
 };
 const demoProfilePaths: Record<string, string> = {
-  "clinical-report-core": "Bundle.entry.resource.resourceType",
-  "report-interpretation": "DiagnosticReport.conclusion / text / presentedForm",
-  "structured-report-source": "DiagnosticReport.performer / resultsInterpreter",
+  "pathology-core-resources": "Bundle.entry.resource.resourceType",
+  "pathology-result-coverage": "DiagnosticReport.result / Observation.code",
+  "pathology-clinical-truth": "Patient.identifier / Observation.valueQuantity",
+  "standard-pathology-terminology": "Observation.code.coding.system / valueQuantity.system",
+  "specimen-traceability": "Specimen.subject / Observation.specimen / DiagnosticReport.specimen",
   "resolved-references": "Bundle.entry.resource.reference",
   "final-report-status": "DiagnosticReport.status",
-  "source-report-access": "DiagnosticReport.presentedForm",
-  "imaging-identifiers": "ImagingStudy.identifier",
+  "report-interpretation": "DiagnosticReport.conclusion / text / presentedForm",
 };
 const demoProfileAssessment: DeploymentProfileAssessment = {
   profileId: demoProfile.id,
@@ -250,21 +276,19 @@ const demoProfileAssessment: DeploymentProfileAssessment = {
     severity: requirement.severity,
     status: demoProfileStatuses[requirement.id] ?? "pass",
     detail:
-      requirement.id === "structured-report-source"
-        ? "DiagnosticReport does not structure the report source as a performer or results interpreter."
-        : requirement.id === "imaging-identifiers"
-          ? "ImagingStudy narrative retains the identifiers, but ImagingStudy.identifier is empty."
-          : requirement.summary,
+      requirement.id === "standard-pathology-terminology"
+        ? "Clinical facts are intact, but all four tests use local laboratory codes instead of LOINC. Receiving systems may not reliably recognise these results."
+        : requirement.summary,
     evidencePath: demoProfilePaths[requirement.id] ?? requirement.id,
   })),
-  passCount: 5,
-  advisoryCount: 1,
+  passCount: 7,
+  advisoryCount: 0,
   reviewCount: 1,
   blockingCount: 0,
 };
 
 const demoEvaluation: DashboardEvaluation = {
-  id: "demo-synthetic-radiology",
+  id: "demo-synthetic-pathology",
   createdAt: "2026-08-11T00:42:00.000Z",
   status: "DEMO",
   stage: "Curated fixture",
@@ -279,27 +303,27 @@ const demoEvaluation: DashboardEvaluation = {
     privacyContainment: 100,
     securityRobustness: 96,
     constraintPerformance: 92.0,
-    valueUtility: 95.0,
+    valueUtility: 96.0,
   },
   dimensionReasons: {
-    taskReliability: ["The examination, findings, impression, dates and resource relationships match the source."],
+    taskReliability: ["Every pathology result, value, unit and patient identifier matches the approved reference."],
     privacyContainment: ["Only synthetic identifiers are present."],
     securityRobustness: ["The candidate contains no unsupported clinical or operational instructions."],
     constraintPerformance: ["The fixture is a compact, parseable FHIR Bundle."],
-    valueUtility: ["The GP profile requires structured report attribution before deployment."],
+    valueUtility: ["The clinical facts are useful, but local test codes need terminology mapping before interoperable exchange."],
   },
   modelId: "uploaded pipeline candidate",
   evaluatorModel: "gpt-5.4-mini",
   documents: [
-    { name: "synthetic-radiology-cda.xml", key: "demo/synthetic-radiology-cda.xml" },
-    { name: "synthetic-radiology-report.pdf", key: "demo/synthetic-radiology-report.pdf" },
+    { name: "1-source-pathology-cda.xml", key: "demo/02-conditional/1-source-pathology-cda.xml" },
+    { name: "2-source-pathology-report.pdf", key: "demo/02-conditional/2-source-pathology-report.pdf" },
   ],
   referenceOutputs: [
-    { name: "expected-radiology-fhir-bundle.json", key: "demo/reference/expected-radiology-fhir-bundle.json" },
+    { name: "3-reference-fhir.json", key: "demo/02-conditional/3-reference-fhir.json" },
   ],
   policyFiles: [],
   aiOutputs: [
-    { name: "controlled-radiology-fhir-bundle.json", key: "demo/candidates/controlled-radiology-fhir-bundle.json" },
+    { name: "4-candidate-conditional-fhir.json", key: "demo/02-conditional/4-candidate-conditional-fhir.json" },
   ],
   metrics: {
     faithfulness: 98.4,
@@ -309,21 +333,21 @@ const demoEvaluation: DashboardEvaluation = {
     latency: null,
   },
   strengths: [
-    "Patient and DiagnosticReport resources are present.",
+    "Patient, Specimen, DiagnosticReport and all four Observation resources are present.",
+    "Every clinical value and unit matches the approved reference.",
     "All internal Bundle references resolve to candidate resources.",
-    "DiagnosticReport retains the complete findings and readable impression.",
   ],
   issues: [
-    "DiagnosticReport does not structure the report source as a performer or results interpreter.",
+    "The candidate uses local laboratory test codes instead of standard LOINC codes.",
   ],
   cases: [
     {
       id: "EV-001",
-      source: "CDA + radiology PDF",
-      sourceDocuments: ["synthetic-radiology-cda.xml", "synthetic-radiology-report.pdf"],
+      source: "CDA + pathology PDF",
+      sourceDocuments: ["1-source-pathology-cda.xml", "2-source-pathology-report.pdf"],
       target: "FHIR R4 Bundle",
-      output: "controlled-radiology-fhir-bundle.json",
-      finding: "Structured report attribution requires GP review.",
+      output: "4-candidate-conditional-fhir.json",
+      finding: "Clinical facts are correct, but local test codes need LOINC mapping.",
       severity: "Watch",
       metrics: {
         faithfulness: 98.4,
@@ -335,18 +359,18 @@ const demoEvaluation: DashboardEvaluation = {
       candidateText: demoCandidatePreview,
       referenceText: demoReferencePreview,
       reasons: [
-        "The examination, findings, impression and resource relationships match the approved reference.",
-        "The PDF names the organisation and radiologist, but the candidate does not map them into performer fields.",
-        "The Bundle remains parseable and free of direct PHI.",
+        "All four pathology observations match the approved reference values and units.",
+        "The candidate uses local test codes where the benchmark requires LOINC.",
+        "The Bundle remains structurally valid, complete and free of direct PHI.",
       ],
-      rulePasses: ["FHIR structural validation", "PHI containment", "Prompt injection resistance"],
-      ruleFailures: ["Structured report source"],
+      rulePasses: ["Clinical truth", "Result coverage", "FHIR structural validation", "PHI containment"],
+      ruleFailures: ["Standard pathology terminology"],
       fhirValidation: {
         parsed: true,
         valid: true,
         score: 100,
-        resourceTypes: ["DiagnosticReport", "ImagingStudy", "Organization", "Patient", "Practitioner"],
-        resourceCount: 5,
+        resourceTypes: ["DiagnosticReport", "Observation", "Patient", "Specimen"],
+        resourceCount: 7,
         errors: [],
         warnings: [],
         unresolvedReferences: [],
@@ -467,7 +491,7 @@ const compactMs = (value: number | null | undefined) =>
 
 const normaliseCapability = (value: string) =>
   value === "structured_clinical_resource_generation"
-    ? "Text to FHIR"
+    ? "Pathology to FHIR"
     : value === "document_summarisation"
       ? "Document summary"
       : value.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
@@ -636,30 +660,9 @@ const decisionPresentation: Record<
 
 const profileDecisionPresentation = (
   decision: Decision,
-  profileName: string | null,
+  _profileName: string | null,
 ) => {
-  const fallback = decisionPresentation[decision];
-  if (!profileName) return fallback;
-
-  if (decision === "Ready") {
-    return {
-      ...fallback,
-      heading: `Ready for ${profileName}`,
-      summary: `All blocking ${profileName} requirements were met. Continue with controlled clinical review.`,
-    };
-  }
-  if (decision === "Conditional") {
-    return {
-      ...fallback,
-      heading: `Review before ${profileName}`,
-      summary: `The clinical output is usable, but ${profileName} has requirements that need review.`,
-    };
-  }
-  return {
-    ...fallback,
-    heading: `Not ready for ${profileName}`,
-    summary: `One or more ${profileName} requirements block deployment of this candidate.`,
-  };
+  return decisionPresentation[decision];
 };
 
 const statusTone = (value: string) => {
@@ -669,6 +672,9 @@ const statusTone = (value: string) => {
   if (key === "conditional") return "warn";
   return "neutral";
 };
+
+const hasCompletedResult = (evaluation: DashboardEvaluation) =>
+  evaluation.status.toUpperCase() === "COMPLETED" || evaluation.status === "DEMO";
 
 const StatusPill = ({ value, tone }: { value: string; tone?: string }) => (
   <span className={`pill tone-${tone ?? statusTone(value)}`}>
@@ -789,7 +795,7 @@ const workflowStageMeta: Record<
   },
   BUILDING_CASES: {
     title: "Building the assessment case",
-    detail: "Connecting the source evidence to the selected organisation requirements.",
+    detail: "Connecting the CDA, companion PDF and approved pathology benchmark.",
     progress: 42,
     ceiling: 54,
     stepIndex: 2,
@@ -809,8 +815,8 @@ const workflowStageMeta: Record<
     stepIndex: 3,
   },
   SCORING: {
-    title: "Applying the organisation rules",
-    detail: "Checking each requirement and preparing evidence for any field that needs attention.",
+    title: "Applying the pathology checks",
+    detail: "Checking completeness, clinical truth, terminology and FHIR traceability.",
     progress: 74,
     ceiling: 99,
     stepIndex: 4,
@@ -974,7 +980,7 @@ const EvaluationProgressCard = ({
       <WorkflowProgress activeIndex={visualStageMeta.stepIndex} />
 
       <footer className="evaluation-loading-foot">
-        <span><Activity aria-hidden="true" /> Evaluating for {profileName ?? "the selected organisation"}</span>
+        <span><Activity aria-hidden="true" /> Evaluating {profileName ?? "the pathology conversion"}</span>
         <span>{isComplete ? "Opening completed results…" : `${elapsedSeconds}s elapsed · Results open automatically`}</span>
       </footer>
     </section>
@@ -1185,7 +1191,7 @@ const RequirementEvidenceWorkspace = ({
 
             <dl className="requirement-explanation-grid">
               <div>
-                <dt>Organisation rule</dt>
+                <dt>Benchmark requirement</dt>
                 <dd>{requirementDefinition?.summary ?? selectedRequirement.detail}</dd>
               </div>
               <div>
@@ -1230,7 +1236,7 @@ const RequirementEvidenceWorkspace = ({
       ) : (
         <div className="result-clear-state requirement-clear-state">
           <CircleCheck aria-hidden="true" />
-          <span>Every organisation requirement was met by this candidate.</span>
+          <span>Every pathology benchmark requirement was met by this candidate.</span>
         </div>
       )}
 
@@ -1357,7 +1363,7 @@ const EvidenceDrawer = ({
                 </div>
                 <dl>
                   <div><dt>FHIR location</dt><dd><code>{focusedEvidence.candidateLocation}</code></dd></div>
-                  <div><dt>Missing fields</dt><dd>{focusedEvidence.missingFields.join(", ") || "No field is missing"}</dd></div>
+                  <div><dt>Field status</dt><dd>{focusedEvidence.missingFields.join(", ") || "Fields are present; the highlighted content does not meet the benchmark"}</dd></div>
                 </dl>
               </section>
             ) : null}
@@ -1385,52 +1391,43 @@ const documentationSections = [
 ];
 
 const fhirExample = `{
-  "resourceType": "Bundle",
-  "type": "collection",
-  "entry": [
-    {
-      "fullUrl": "urn:uuid:patient-1",
-      "resource": {
-        "resourceType": "Patient",
-        "identifier": [{ "system": "urn:mrn", "value": "SYN-001" }]
-      }
-    },
-    {
-      "resource": {
-        "resourceType": "ImagingStudy",
-        "status": "available",
-        "modality": [{ "system": "http://dicom.nema.org/resources/ontology/DCM", "code": "DX" }],
-        "subject": { "reference": "urn:uuid:patient-1" }
-      }
-    }
-  ]
+  "resourceType": "Observation",
+  "status": "final",
+  "code": {
+    "coding": [{
+      "system": "http://loinc.org",
+      "code": "2823-3",
+      "display": "Potassium"
+    }]
+  },
+  "subject": { "reference": "Patient/patient-1" },
+  "specimen": { "reference": "Specimen/serum-1" },
+  "valueQuantity": {
+    "value": 6.2,
+    "unit": "mmol/L",
+    "system": "http://unitsofmeasure.org"
+  }
 }`;
 
 const DocumentationPage = ({
   onCreate,
-  onData,
 }: {
   onCreate: () => void;
-  onData: () => void;
 }) => (
   <section className="docs-plane">
     <div className="docs-hero">
       <div>
-        <span className="eyebrow">Documentation</span>
-        <h1>HL7 evaluation guide</h1>
+        <span className="eyebrow">Assessment method</span>
+        <h1>Pathology conversion benchmark</h1>
         <p>
-          Product documentation for assessing whether clinical AI output is ready to become
-          structured FHIR JSON for review, analytics, and HealthLake-style ingestion.
+          How one CDA/PDF-to-FHIR capability is tested for completeness, clinical truth,
+          interoperability and deployment readiness.
         </p>
       </div>
       <div className="docs-hero-actions">
         <button type="button" onClick={onCreate}>
           <UploadCloud aria-hidden="true" />
           New evaluation
-        </button>
-        <button type="button" onClick={onData}>
-          <Boxes aria-hidden="true" />
-          Evidence
         </button>
       </div>
     </div>
@@ -1452,21 +1449,20 @@ const DocumentationPage = ({
             <h2>Overview</h2>
           </div>
           <p>
-            The tool is an evaluation layer for a clinical document conversion pipeline. It does
-            not replace a production converter. It tests whether AI-generated FHIR resources are
-            faithful to the source clinical bundle, structurally usable, privacy-aware, and suitable
-            for controlled ingestion review.
+            The tool evaluates one specific AI capability: converting a pathology CDA and companion
+            PDF into FHIR R4. It compares the candidate with an approved reference, then applies one
+            fixed pathology benchmark and five readiness dimensions.
           </p>
           <div className="docs-card-grid three">
             <div className="docs-card">
               <FileJson aria-hidden="true" />
               <strong>Input</strong>
-              <span>CDA/XML, companion PDF, candidate FHIR, reference FHIR, and optional policy.</span>
+              <span>CDA/XML, companion pathology PDF, approved reference FHIR and candidate FHIR.</span>
             </div>
             <div className="docs-card">
               <TestTube2 aria-hidden="true" />
               <strong>Evaluation</strong>
-              <span>Builds cases, scores mappings, detects risks, and creates findings.</span>
+              <span>Separates result coverage, exact clinical truth, FHIR validity and terminology.</span>
             </div>
             <div className="docs-card">
               <ShieldCheck aria-hidden="true" />
@@ -1483,11 +1479,11 @@ const DocumentationPage = ({
           </div>
           <div className="pipeline-doc">
             {[
-              ["Organisation", "Choose whose converter is being assessed."],
-              ["Upload", "Add the CDA, PDF, reference and candidate FHIR."],
-              ["Score", "Measure faithfulness, coverage, compliance, privacy, latency."],
-              ["Apply gates", "Classify each organisation requirement as met, advisory, review or block."],
-              ["Review", "Show one organisation-specific decision with evidence."],
+              ["Upload", "Add the CDA, pathology PDF, approved reference and candidate FHIR."],
+              ["Compare", "Match every benchmark result to its candidate Observation."],
+              ["Check truth", "Compare patient identity, values and units exactly."],
+              ["Check exchange", "Validate FHIR references, LOINC terminology and UCUM units."],
+              ["Decide", "Return Ready, Conditional or Not Ready with exact FHIR evidence."],
             ].map(([title, body], index) => (
               <div className="pipeline-step-doc" key={title}>
                 <span>{String(index + 1).padStart(2, "0")}</span>
@@ -1538,8 +1534,8 @@ const DocumentationPage = ({
             <h2>FHIR output</h2>
           </div>
           <p>
-            FHIR represents healthcare data as modular resources. The controlled demo focuses on a
-            radiology Bundle containing Patient, DiagnosticReport and ImagingStudy resources.
+            FHIR represents healthcare data as modular resources. The pathology benchmark connects
+            Patient, Specimen, Observation and DiagnosticReport resources in one Bundle.
           </p>
           <div className="schema-grid">
             <div className="schema-card">
@@ -1547,12 +1543,12 @@ const DocumentationPage = ({
               <dl>
                 <div><dt>Bundle</dt><dd>Container for resources and exchange payloads.</dd></div>
                 <div><dt>Patient</dt><dd>Identity, demographics, identifiers.</dd></div>
-                <div><dt>DiagnosticReport</dt><dd>Report context, narrative and clinical impression.</dd></div>
-                <div><dt>ImagingStudy</dt><dd>Study identifiers, modality and imaging context.</dd></div>
-                <div><dt>Organization</dt><dd>Diagnostic service responsible for the report.</dd></div>
+                <div><dt>Specimen</dt><dd>The serum or blood sample that was tested.</dd></div>
+                <div><dt>Observation</dt><dd>One test result with code, value, unit, range and interpretation.</dd></div>
+                <div><dt>DiagnosticReport</dt><dd>The final report that groups results and preserves the conclusion.</dd></div>
               </dl>
             </div>
-            <pre className="code-panel" aria-label="FHIR Bundle example">
+            <pre className="code-panel" aria-label="FHIR Observation example">
               <code>{fhirExample}</code>
             </pre>
           </div>
@@ -1601,11 +1597,11 @@ const DocumentationPage = ({
             <h2>Demo</h2>
           </div>
           <ol className="demo-list">
-            <li>Upload the synthetic radiology CDA, PDF, candidate FHIR and reference FHIR.</li>
-            <li>Show that the PDF contains the radiologist, organisation, DICOM UID and imaging context.</li>
-            <li>Run Hospital, GP clinic and Radiology practice sequentially with the same files.</li>
-            <li>Compare Ready, Conditional and Not Ready decisions against exact FHIR paths.</li>
-            <li>Use Evidence to prove that only the organisation requirements changed.</li>
+            <li>Use one numbered folder and show the critical potassium value in the PDF.</li>
+            <li>Upload the same CDA, PDF and reference, then the folder's candidate FHIR.</li>
+            <li>Ready proves every clinical and interoperability requirement passes.</li>
+            <li>Conditional proves complete and correct data can still need LOINC remediation.</li>
+            <li>Not Ready proves complete, valid FHIR can still contain a dangerous clinical mismatch.</li>
           </ol>
           <div className="reference-row">
             <a href="https://hl7.org/fhir/R4/bundle.html" target="_blank" rel="noreferrer">
@@ -1614,8 +1610,11 @@ const DocumentationPage = ({
             <a href="https://hl7.org/fhir/R4/diagnosticreport.html" target="_blank" rel="noreferrer">
               FHIR DiagnosticReport R4
             </a>
-            <a href="https://hl7.org/fhir/R4/imagingstudy.html" target="_blank" rel="noreferrer">
-              FHIR ImagingStudy R4
+            <a href="https://hl7.org/fhir/R4/observation.html" target="_blank" rel="noreferrer">
+              FHIR Observation R4
+            </a>
+            <a href="https://hl7.org/fhir/R4/specimen.html" target="_blank" rel="noreferrer">
+              FHIR Specimen R4
             </a>
             <a
               href="https://projectlifedashboard.hl7.org/specifications/hl7-cda-r2-implementation-guide-consolidated-cda-templates-for-clinical-notes-release-2-1/"
@@ -1636,18 +1635,17 @@ const navGroups: Array<{
   items: Array<{ id: ViewId; label: string; icon: typeof LayoutDashboard }>;
 }> = [
   {
+    title: "Workspace",
     items: [
-      { id: "overview", label: "Overview", icon: LayoutDashboard },
-      { id: "results", label: "Results", icon: CircleCheck },
-      { id: "data", label: "Evidence", icon: Database },
+      { id: "overview", label: "Dashboard", icon: LayoutDashboard },
+      { id: "settings", label: "Evaluations", icon: Layers },
     ],
   },
   {
-    title: "Manage",
+    title: "Tools",
     items: [
-      { id: "capability", label: "Capability overview", icon: Boxes },
-      { id: "create", label: "New evaluation", icon: PlusSquare },
-      { id: "settings", label: "Runs", icon: Layers },
+      { id: "capability", label: "Candidate generator", icon: Boxes },
+      { id: "documentation", label: "Assessment method", icon: BookOpen },
     ],
   },
 ];
@@ -2048,9 +2046,9 @@ const CapabilityOverviewPage = ({
     <section className="plane capability-plane capability-simple">
       <div className="plane-head capability-head">
         <div>
-          <span className="eyebrow">Capability overview</span>
-          <h1>CDA/PDF to FHIR</h1>
-          <p>Generated FHIR resources with source-linked evidence.</p>
+          <span className="eyebrow">Candidate generator</span>
+          <h1>Pathology CDA/PDF to FHIR</h1>
+          <p>Generate a candidate Bundle, then trace each FHIR resource back to its source evidence.</p>
         </div>
         {isComplete && candidateText ? (
           <button className="quiet-action" type="button" onClick={onOpenResults}>
@@ -2198,7 +2196,7 @@ const readInitialTheme = (): Theme => {
 
 const readInitialView = (): ViewId => {
   if (typeof window === "undefined") {
-    return "results";
+    return "overview";
   }
 
   const requested = new URLSearchParams(window.location.search).get("view");
@@ -2210,7 +2208,7 @@ const readInitialView = (): ViewId => {
     requested === "settings" ||
     requested === "documentation"
     ? requested
-    : "results";
+    : "overview";
 };
 
 function App() {
@@ -2220,17 +2218,15 @@ function App() {
   const [uploads, setUploads] = useState<UploadState>(defaultUploads);
   const [capabilityInputs, setCapabilityInputs] = useState<CapabilityInputState>({ cda: [], pdf: [] });
   const [capabilityRunId, setCapabilityRunId] = useState<string | null>(null);
-  const [selectedProfileId, setSelectedProfileId] = useState<DeploymentProfileId | null>(null);
   const [reuseContext, setReuseContext] = useState<{
     evaluationId: string;
-    profileName: string;
   } | null>(null);
   const [lastSubmittedEvaluationId, setLastSubmittedEvaluationId] = useState<string | null>(null);
   const [activeEvaluationProgress, setActiveEvaluationProgress] =
     useState<ActiveEvaluationProgress | null>(null);
   const [modelId, setModelId] = useState("gpt-5.4-mini");
   const [notes, setNotes] = useState(
-    "Evaluate HL7 CDA/PDF input against generated FHIR JSON for mapping accuracy, unsupported codes, PHI leakage, security failures, and HealthLake readiness.",
+    "Assess pathology result completeness, exact clinical values, standard terminology, FHIR validity, traceability, privacy and operational readiness.",
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isStartingCapability, setIsStartingCapability] = useState(false);
@@ -2399,6 +2395,11 @@ function App() {
   const canClearAllEvaluations =
     persistedEvaluations.length > 0 && activePersistedEvaluations.length === 0;
 
+  const completedDashboardRuns = allRuns.filter(hasCompletedResult);
+  const dashboardEvaluation = completedDashboardRuns.find(
+    (evaluation) => evaluation.id === selectedEvaluation.id,
+  ) ?? completedDashboardRuns[0] ?? demoEvaluation;
+
   const summary = useMemo(() => {
     const passes = selectedEvaluation.cases.filter((item) => item.severity === "Pass").length;
     const review = selectedEvaluation.cases.filter((item) => item.severity === "Watch").length;
@@ -2414,7 +2415,12 @@ function App() {
     ? activeEvaluationProgress
     : null;
   const shouldShowSelectedProgress = isSelectedEvaluationRunning || Boolean(selectedProgressSession);
-  const shouldShowSelectedResult = !isSelectedEvaluationRunning && !selectedProgressSession;
+  const shouldShowSelectedResult = hasCompletedResult(selectedEvaluation)
+    && !isSelectedEvaluationRunning
+    && !selectedProgressSession;
+  const shouldShowSelectedFailure = !hasCompletedResult(selectedEvaluation)
+    && !isSelectedEvaluationRunning
+    && !selectedProgressSession;
   const selectedDecisionPresentation = profileDecisionPresentation(
     selectedEvaluation.decision,
     selectedEvaluationProfile?.name ?? null,
@@ -2424,18 +2430,20 @@ function App() {
   const remainingIssues = selectedEvaluation.issues.slice(3);
 
   const overviewStats = useMemo(() => {
-    const completed = allRuns.filter((evaluation) => evaluation.status !== "RUNNING").length;
+    const completed = completedDashboardRuns.length;
     const average =
-      allRuns.reduce((total, evaluation) => total + evaluation.readinessScore, 0) /
-      Math.max(allRuns.length, 1);
-    const needsReview = allRuns.filter((evaluation) => evaluation.decision !== "Ready").length;
+      completedDashboardRuns.reduce((total, evaluation) => total + evaluation.readinessScore, 0) /
+      Math.max(completedDashboardRuns.length, 1);
+    const needsReview = completedDashboardRuns.filter(
+      (evaluation) => evaluation.decision !== "Ready",
+    ).length;
 
     return {
       completed,
       average,
       needsReview,
     };
-  }, [allRuns]);
+  }, [completedDashboardRuns]);
 
   const isInitialEvaluationLoad = isLoadingEvaluations && evaluations.length === 0;
 
@@ -2456,7 +2464,7 @@ function App() {
     });
   }, [dataSearch, severityFilter, selectedEvaluation.cases]);
 
-  const selectedDeploymentProfile = getDeploymentProfile(selectedProfileId);
+  const selectedDeploymentProfile = pathologyProfile;
   const hasCdaSource = uploads.clinicalBundle.some((file) =>
     /\.(?:xml|cda|ccda)$/i.test(file.name),
   );
@@ -2464,14 +2472,12 @@ function App() {
   const hasReferenceFhir = uploads.expectedResources.length > 0;
   const hasCandidateFhir = uploads.candidateOutputs.length > 0;
   const isEvaluationReady = Boolean(
-    selectedDeploymentProfile
-    && hasCdaSource
+    hasCdaSource
     && hasPdfSource
     && hasReferenceFhir
     && hasCandidateFhir,
   );
   const setupChecks = [
-    { label: "Organisation", ready: Boolean(selectedDeploymentProfile) },
     { label: "CDA + PDF", ready: hasCdaSource && hasPdfSource },
     { label: "Reference", ready: hasReferenceFhir },
     { label: "Candidate", ready: hasCandidateFhir },
@@ -2487,7 +2493,6 @@ function App() {
 
   const openFreshEvaluation = () => {
     setUploads(defaultUploads());
-    setSelectedProfileId(null);
     setReuseContext(null);
     setView("create");
   };
@@ -2498,11 +2503,8 @@ function App() {
       return;
     }
 
-    const previousProfile = getDeploymentProfile(selectedEvaluation.deploymentProfileId);
-    setSelectedProfileId(null);
     setReuseContext({
       evaluationId: selectedEvaluation.id,
-      profileName: previousProfile?.name ?? "the previous organisation",
     });
     setView("create");
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
@@ -2560,7 +2562,7 @@ function App() {
             "prompt_injection_resistance",
           ],
           generationInstructions:
-            "Generate one FHIR R4 Bundle from the CDA and companion radiology PDF. Use the CDA as structured context and enrich it with PDF-only findings, impression, reporting organisation, radiologist, accession number, DICOM Study UID, modality and body site when explicitly supported. Create Patient, DiagnosticReport, ImagingStudy, Organization and Practitioner resources where evidence exists. Preserve exact identifiers, dates and references; do not infer missing facts. Return JSON only.",
+            "Generate one FHIR R4 Bundle from the CDA and companion pathology PDF. Use the CDA for patient, report and specimen context, then extract every PDF pathology result with its exact value, unit, reference range and interpretation. Create Patient, Specimen, Observation and DiagnosticReport resources, plus Organization and Practitioner when supported. Use standard LOINC test codes and UCUM units where the source supports the mapping. Preserve exact identifiers, dates and references; do not infer missing facts. Return JSON only.",
         },
       });
 
@@ -2582,11 +2584,6 @@ function App() {
 
   const submitEvaluation = async () => {
     setToast(null);
-
-    if (!selectedDeploymentProfile) {
-      setToast("Choose one organisation's requirements first.");
-      return;
-    }
 
     if (!hasCdaSource || !hasPdfSource) {
       setToast("Add both the CDA/XML source and its companion PDF.");
@@ -2682,7 +2679,7 @@ function App() {
           ? { ...current, evaluationId: response.evaluationId }
           : current,
       );
-      setToast("Files uploaded. The organisation requirements are now being applied.");
+      setToast("Files uploaded. The pathology benchmark is now being applied.");
 
       try {
         const detail = await getEvaluation(response.evaluationId);
@@ -2760,7 +2757,6 @@ function App() {
 
       setUploads(defaultUploads());
       setCapabilityInputs({ cda: [], pdf: [] });
-      setSelectedProfileId(null);
       setActiveEvaluationProgress(null);
       setReuseContext(null);
       setSelectedRequirement(null);
@@ -2805,7 +2801,7 @@ function App() {
             return (
               <option key={run.id} value={run.id}>
                 {run.id === demoEvaluation.id
-                  ? `Synthetic radiology · ${demoProfile.shortName}`
+                  ? "Synthetic pathology · Conditional"
                   : `${run.id}${profile ? ` · ${profile.shortName}` : ""}`}
               </option>
             );
@@ -2814,6 +2810,9 @@ function App() {
       </select>
     </label>
   );
+  const activeNavView: ViewId = view === "results" || view === "data"
+    ? "settings"
+    : view;
 
   return (
     <div className="app" data-theme={theme}>
@@ -2873,12 +2872,9 @@ function App() {
                 return (
                   <button
                     key={item.id}
-                    className={view === item.id ? "active" : ""}
+                    className={activeNavView === item.id ? "active" : ""}
                     type="button"
-                    onClick={() => {
-                      if (item.id === "create") openFreshEvaluation();
-                      else setView(item.id);
-                    }}
+                    onClick={() => setView(item.id)}
                   >
                     <Icon aria-hidden="true" />
                     <span>{item.label}</span>
@@ -2887,14 +2883,6 @@ function App() {
               })}
             </div>
           ))}
-          <button
-            className={view === "documentation" ? "docs-link active" : "docs-link"}
-            type="button"
-            onClick={() => setView("documentation")}
-          >
-            <BookOpen aria-hidden="true" />
-            Documentation
-          </button>
           <div className="synthetic-note">
             <FlaskConical aria-hidden="true" />
             <span><strong>Synthetic only</strong><small>No clinical use</small></span>
@@ -2936,83 +2924,49 @@ function App() {
               }}
             />
           ) : view === "documentation" ? (
-            <DocumentationPage onCreate={openFreshEvaluation} onData={() => setView("data")} />
+            <DocumentationPage onCreate={openFreshEvaluation} />
           ) : view === "create" ? (
             <section className="plane create-plane">
               <div className="plane-head">
                 <div>
-                  <span className="eyebrow">Evaluation builder</span>
-                  <h1>Evaluate one FHIR output</h1>
-                  <p>Select the organisation whose conversion capability is being assessed.</p>
+                  <span className="eyebrow">New evaluation</span>
+                  <h1>Assess one pathology conversion</h1>
+                  <p>Compare a candidate FHIR bundle with the same approved pathology benchmark.</p>
                 </div>
-                <span className="scope-chip"><ShieldCheck aria-hidden="true" /> Same capability · one organisation</span>
+                <span className="scope-chip"><ShieldCheck aria-hidden="true" /> Fixed pathology benchmark · v{pathologyProfile.version}</span>
               </div>
 
               {reuseContext ? (
                 <div className="reuse-banner" role="status">
                   <span className="reuse-banner-icon"><Link2 aria-hidden="true" /></span>
                   <span>
-                    <strong>Same case retained</strong>
-                    <small>
-                      CDA, PDF, reference and candidate from {reuseContext.profileName} remain unchanged.
-                    </small>
+                    <strong>Previous files retained</strong>
+                    <small>CDA, PDF, reference and candidate remain unchanged for a clean rerun.</small>
                   </span>
                   <span className="reuse-run-id">{reuseContext.evaluationId}</span>
                 </div>
               ) : null}
 
-              <div className="card">
-                <div className="section-heading numbered-heading">
-                  <span>01</span>
-                  <div><h2 className="card-title">Choose organisation requirements</h2><small>The files stay constant; only this organisation's acceptance rules apply.</small></div>
+              <div className="card fixed-benchmark-card">
+                <div className="fixed-benchmark-copy">
+                  <span className="profile-select-icon"><TestTube2 aria-hidden="true" /></span>
+                  <div>
+                    <span className="eyebrow">Assessment scope</span>
+                    <h2 className="card-title">CDA + pathology PDF → FHIR R4</h2>
+                    <p>Every run is checked against the same eight requirements. The candidate—not the benchmark—is what changes.</p>
+                  </div>
                 </div>
-                <div className="profile-selector-grid" role="radiogroup" aria-label="Organisation requirements">
-                  {deploymentProfiles.map((profile) => {
-                    const active = selectedProfileId === profile.id;
-                    const ProfileIcon = profile.id === "hospital"
-                      ? Database
-                      : profile.id === "gp-clinic"
-                        ? FileText
-                        : ScanLine;
-                    const wasPrevious = reuseContext?.profileName === profile.name;
-                    return (
-                      <button
-                        className={active ? "profile-select-card active" : "profile-select-card"}
-                        type="button"
-                        role="radio"
-                        aria-checked={active}
-                        onClick={() => setSelectedProfileId(profile.id)}
-                        key={profile.id}
-                      >
-                        <span className="profile-select-head">
-                          <span className="profile-select-icon"><ProfileIcon aria-hidden="true" /></span>
-                          <span className="profile-level">{profile.level}</span>
-                        </span>
-                        <span className="profile-select-copy">
-                          <strong>{profile.name}</strong>
-                          <small>{profile.purpose}</small>
-                        </span>
-                        <span className="profile-preview-list">
-                          {profile.requirements.slice(0, 3).map((requirement) => (
-                            <span key={requirement.id}>
-                              <CircleCheck aria-hidden="true" />
-                              {requirement.label}
-                            </span>
-                          ))}
-                        </span>
-                        <span className="profile-select-foot">
-                          <span>Requirements v{profile.version}</span>
-                          <strong>{active ? "Selected" : wasPrevious ? "Previous run" : "Select"}</strong>
-                        </span>
-                      </button>
-                    );
-                  })}
+                <div className="benchmark-check-grid" aria-label="Pathology benchmark checks">
+                  <span><FileCheck2 aria-hidden="true" /><strong>Complete</strong><small>Every reported test is present</small></span>
+                  <span><CircleCheck aria-hidden="true" /><strong>Clinically exact</strong><small>Values, units and patient match</small></span>
+                  <span><Link2 aria-hidden="true" /><strong>Interoperable</strong><small>LOINC, UCUM and references</small></span>
+                  <span><ShieldCheck aria-hidden="true" /><strong>Safe to use</strong><small>Five readiness gates still pass</small></span>
                 </div>
               </div>
 
               <div className="card">
                 <div className="section-heading numbered-heading">
-                  <span>02</span>
+                  <span>01</span>
                   <div><h2 className="card-title">Upload the case</h2><small>The CDA and companion PDF are assessed together as one clinical source.</small></div>
                 </div>
                 <div className="file-grid">
@@ -3020,19 +2974,9 @@ function App() {
                     label="Clinical source bundle"
                     accept=".pdf,.xml,.cda,.ccda,.txt,.md,.json"
                     files={uploads.clinicalBundle}
-                    hint="CDA/XML + companion PDF · required"
+                    hint="CDA + PDF · both required"
                     onChange={(files) => {
                       setUploads((current) => ({ ...current, clinicalBundle: files }));
-                      setReuseContext(null);
-                    }}
-                  />
-                  <FileField
-                    label="Candidate FHIR"
-                    accept=".json,.txt,.md,.csv"
-                    files={uploads.candidateOutputs}
-                    hint="Output being assessed · required"
-                    onChange={(files) => {
-                      setUploads((current) => ({ ...current, candidateOutputs: files }));
                       setReuseContext(null);
                     }}
                   />
@@ -3040,19 +2984,19 @@ function App() {
                     label="Reference FHIR"
                     accept=".json,.txt,.md,.csv"
                     files={uploads.expectedResources}
-                    hint="Approved expected output · required"
+                    hint="Approved benchmark · required"
                     onChange={(files) => {
                       setUploads((current) => ({ ...current, expectedResources: files }));
                       setReuseContext(null);
                     }}
                   />
                   <FileField
-                    label="Supporting policy"
-                    accept=".pdf,.txt,.md,.json"
-                    files={uploads.governancePolicies}
-                    hint="Additional governance context · optional"
+                    label="Candidate FHIR"
+                    accept=".json,.txt,.md,.csv"
+                    files={uploads.candidateOutputs}
+                    hint="AI output to assess · required"
                     onChange={(files) => {
-                      setUploads((current) => ({ ...current, governancePolicies: files }));
+                      setUploads((current) => ({ ...current, candidateOutputs: files }));
                       setReuseContext(null);
                     }}
                   />
@@ -3061,17 +3005,9 @@ function App() {
 
               <div className="card create-footer">
                 <div className="run-summary">
-                  <span className="eyebrow">03 · Review and run</span>
-                  <h2>
-                    {selectedDeploymentProfile
-                      ? `Assess for ${selectedDeploymentProfile.name}`
-                      : "Complete the setup"}
-                  </h2>
-                  <p>
-                    {selectedDeploymentProfile
-                      ? `${selectedDeploymentProfile.requirements.length} organisation requirements will be applied automatically.`
-                      : "Choose an organisation and add all required files."}
-                  </p>
+                  <span className="eyebrow">02 · Review and run</span>
+                  <h2>Run the pathology readiness assessment</h2>
+                  <p>{selectedDeploymentProfile.requirements.length} fixed pathology requirements and five readiness dimensions will be applied automatically.</p>
                   <div className="setup-checks" aria-label={`${completedSetupChecks} of ${setupChecks.length} setup steps complete`}>
                     {setupChecks.map((item) => (
                       <span className={item.ready ? "ready" : ""} key={item.label}>
@@ -3118,9 +3054,9 @@ function App() {
             <section className="plane">
               <div className="plane-head">
                 <div>
-                  <span className="eyebrow">Run registry</span>
-                  <h1>Evaluation history</h1>
-                  <p>Open, compare or remove persisted AWS evaluation runs.</p>
+                  <span className="eyebrow">Evaluations</span>
+                  <h1>Pathology evaluation runs</h1>
+                  <p>Open a run to see its decision, exact findings and candidate FHIR evidence.</p>
                 </div>
                 <div className="run-registry-actions">
                   <button
@@ -3152,7 +3088,7 @@ function App() {
                 </div>
                 <div className="run-registry-row fixture-row">
                   <button type="button" onClick={() => { setSelectedId(demoEvaluation.id); setView("results"); }}>
-                    <span className="run-primary"><FlaskConical aria-hidden="true" /><span><strong>Synthetic radiology baseline</strong><small>{demoProfile.name} · Requirements v{demoProfile.version}</small></span></span>
+                    <span className="run-primary"><FlaskConical aria-hidden="true" /><span><strong>Synthetic pathology example</strong><small>Local codes · Expected Conditional</small></span></span>
                     <span>{formatDate(demoEvaluation.createdAt)}</span>
                     <strong>{score(demoEvaluation.readinessScore)}</strong>
                     <StatusPill value={demoEvaluation.decision} tone="warn" />
@@ -3185,9 +3121,9 @@ function App() {
             <section className="plane">
               <div className="plane-head">
                 <div>
-                  <span className="eyebrow">Overview</span>
-                  <h1>Run dashboard</h1>
-                  <p>Readiness across recent evaluation runs.</p>
+                  <span className="eyebrow">Dashboard</span>
+                  <h1>Pathology readiness overview</h1>
+                  <p>Summary metrics across CDA/PDF-to-FHIR evaluation runs.</p>
                 </div>
                 <button className="primary-action" type="button" onClick={openFreshEvaluation}>
                   <PlusSquare aria-hidden="true" />
@@ -3197,7 +3133,7 @@ function App() {
 
               <div className="stat-grid">
                 <div className="card stat-tile hero">
-                  <span className="stat-label">Latest readiness</span>
+                  <span className="stat-label">Selected readiness</span>
                   {isInitialEvaluationLoad ? (
                     <>
                       <div className="stat-hero-row">
@@ -3212,18 +3148,18 @@ function App() {
                   ) : (
                     <>
                       <div className="stat-hero-row">
-                        <strong className="stat-value">{score(selectedEvaluation.readinessScore)}</strong>
+                        <strong className="stat-value">{score(dashboardEvaluation.readinessScore)}</strong>
                         <StatusPill
-                          value={selectedEvaluation.decision}
-                          tone={decisionTone[selectedEvaluation.decision]}
+                          value={dashboardEvaluation.decision}
+                          tone={decisionTone[dashboardEvaluation.decision]}
                         />
                       </div>
-                      <div className={`meter-track tone-${decisionTone[selectedEvaluation.decision]}`} aria-hidden="true">
+                      <div className={`meter-track tone-${decisionTone[dashboardEvaluation.decision]}`} aria-hidden="true">
                         <span
-                          style={{ width: `${Math.min(selectedEvaluation.readinessScore, 100)}%` }}
+                          style={{ width: `${Math.min(dashboardEvaluation.readinessScore, 100)}%` }}
                         />
                       </div>
-                      <small>{selectedEvaluation.capability} · {formatDate(selectedEvaluation.createdAt)}</small>
+                      <small>{dashboardEvaluation.capability} · {formatDate(dashboardEvaluation.createdAt)}</small>
                     </>
                   )}
                 </div>
@@ -3305,8 +3241,11 @@ function App() {
                         <span>{evaluation.id === demoEvaluation.id ? "Demo pipeline" : evaluation.id}</span>
                         <span>{evaluation.capability}</span>
                         <span>{formatDate(evaluation.createdAt)}</span>
-                        <strong>{score(evaluation.readinessScore)}</strong>
-                        <StatusPill value={evaluation.decision} tone={decisionTone[evaluation.decision]} />
+                        <strong>{hasCompletedResult(evaluation) ? score(evaluation.readinessScore) : "-"}</strong>
+                        <StatusPill
+                          value={hasCompletedResult(evaluation) ? evaluation.decision : evaluation.status}
+                          tone={hasCompletedResult(evaluation) ? decisionTone[evaluation.decision] : undefined}
+                        />
                       </button>
                     ))
                   )}
@@ -3433,6 +3372,21 @@ function App() {
                 />
               ) : null}
 
+              {shouldShowSelectedFailure ? (
+                <section className="card evaluation-failure-card" role="status">
+                  <span className="evaluation-failure-icon"><AlertTriangle aria-hidden="true" /></span>
+                  <div>
+                    <span className="eyebrow">Run did not complete</span>
+                    <h2>No readiness decision was produced</h2>
+                    <p>This evaluation stopped before scoring, so its zero values are not treated as assessment results.</p>
+                    <small>{selectedEvaluation.raw?.error ?? `Last recorded stage: ${selectedEvaluation.stage}`}</small>
+                  </div>
+                  <button className="primary-action" type="button" onClick={openFreshEvaluation}>
+                    <PlusSquare aria-hidden="true" /> Start a clean evaluation
+                  </button>
+                </section>
+              ) : null}
+
               {shouldShowSelectedResult ? (
                 <section
                   className={`result-decision tone-${decisionTone[selectedEvaluation.decision]}`}
@@ -3441,7 +3395,7 @@ function App() {
                 <div className="result-decision-copy">
                   <div className="result-decision-label">
                     <span className="result-decision-icon"><SelectedDecisionIcon aria-hidden="true" /></span>
-                    <span>Organisation decision</span>
+                    <span>Readiness decision</span>
                     <StatusPill
                       value={selectedEvaluation.decision}
                       tone={decisionTone[selectedEvaluation.decision]}
@@ -3456,7 +3410,7 @@ function App() {
                     {canReuseSelectedFiles ? (
                       <button className="decision-reuse-action" type="button" onClick={reuseSelectedFiles}>
                         <Link2 aria-hidden="true" />
-                        Evaluate same files for another organisation
+                        Run again with the same files
                       </button>
                     ) : null}
                   </div>

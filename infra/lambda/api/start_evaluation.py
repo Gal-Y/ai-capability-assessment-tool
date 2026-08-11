@@ -11,11 +11,7 @@ dynamodb = boto3.resource("dynamodb")
 stepfunctions = boto3.client("stepfunctions")
 table = dynamodb.Table(os.environ["EVALUATIONS_TABLE"])
 workflow_arn = os.environ["EVALUATION_WORKFLOW_ARN"]
-SUPPORTED_DEPLOYMENT_PROFILES = {
-    "hospital",
-    "gp-clinic",
-    "radiology-practice",
-}
+SUPPORTED_DEPLOYMENT_PROFILES = {"pathology-report"}
 
 
 def handler(event, _context):

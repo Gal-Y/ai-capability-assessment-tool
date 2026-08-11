@@ -13,6 +13,7 @@ type EvidenceContext = {
   profileName: string;
   candidateText: string;
   resourceTypes: string[];
+  requirement: ProfileRequirementResult;
 };
 
 export type RequirementEvidence = {
@@ -29,28 +30,46 @@ export type RequirementEvidence = {
   parseError: string | null;
 };
 
-const hasNarrativeImagingIdentifiers = (candidateText: string) =>
-  /(?:accession|study uid|dicom)/i.test(candidateText);
-
-const hasNarrativeImagingContext = (candidateText: string) =>
-  /(?:modality|body site|chest|radiograph)/i.test(candidateText);
-
 const requirementGuidance: Record<string, RequirementGuidance> = {
-  "clinical-report-core": {
+  "pathology-core-resources": {
     resourceType: null,
     fields: ["entry.resource.resourceType"],
-    finding: () => "The candidate is missing a Patient or DiagnosticReport resource.",
-    why: ({ profileName }) =>
-      `${profileName} cannot safely use the bundle without both the patient context and the clinical report.`,
-    fix: "Add the missing Patient or DiagnosticReport resource to Bundle.entry.",
+    finding: ({ requirement }) => requirement.detail,
+    why: () =>
+      "Pathology results cannot be safely interpreted without the patient, tested specimen, report and individual result resources.",
+    fix: "Add the missing Patient, Specimen, DiagnosticReport or Observation resource to Bundle.entry.",
   },
-  "radiology-core-resources": {
-    resourceType: null,
-    fields: ["entry.resource.resourceType"],
-    finding: () => "The candidate is missing one of the core radiology resources.",
-    why: ({ profileName }) =>
-      `${profileName} needs Patient, DiagnosticReport and ImagingStudy resources to keep the report connected to the imaging study.`,
-    fix: "Add the missing Patient, DiagnosticReport or ImagingStudy resource to Bundle.entry.",
+  "pathology-result-coverage": {
+    resourceType: "DiagnosticReport",
+    fields: ["result"],
+    finding: ({ requirement }) => requirement.detail,
+    why: () =>
+      "A structurally valid bundle can still be clinically incomplete if even one result from the source report is absent.",
+    fix: "Add an Observation for every benchmark result and reference each one from DiagnosticReport.result.",
+  },
+  "pathology-clinical-truth": {
+    resourceType: "Observation",
+    fields: ["valueQuantity", "interpretation"],
+    finding: ({ requirement }) => requirement.detail,
+    why: () =>
+      "A changed pathology value can reverse its clinical meaning even when the FHIR is complete and structurally valid.",
+    fix: "Correct the highlighted value and interpretation so they exactly match the source report and approved reference.",
+  },
+  "standard-pathology-terminology": {
+    resourceType: "Observation",
+    fields: ["code.coding", "valueQuantity.system"],
+    finding: ({ requirement }) => requirement.detail,
+    why: () =>
+      "Local codes may work inside one laboratory, but another system cannot reliably recognise the tests without standard terminology.",
+    fix: "Map each local test code to its approved LOINC code while preserving the existing clinical values and UCUM units.",
+  },
+  "specimen-traceability": {
+    resourceType: "Specimen",
+    fields: ["subject", "type"],
+    finding: ({ requirement }) => requirement.detail,
+    why: () =>
+      "Results must remain connected to the patient and specimen that were actually tested.",
+    fix: "Link the Specimen to the patient, then link every Observation and the DiagnosticReport to that specimen.",
   },
   "resolved-references": {
     resourceType: null,
@@ -76,63 +95,14 @@ const requirementGuidance: Record<string, RequirementGuidance> = {
       `${profileName} needs a clinician-readable interpretation, not only codes and resource links.`,
     fix: "Retain the conclusion, a narrative text block, or the issued report through presentedForm.",
   },
-  "structured-report-source": {
-    resourceType: "DiagnosticReport",
-    fields: ["performer", "resultsInterpreter"],
-    finding: ({ resourceTypes }) =>
-      resourceTypes.includes("Organization") || resourceTypes.includes("Practitioner")
-        ? "The candidate creates the organisation or clinician, but the DiagnosticReport does not link to them."
-        : "The DiagnosticReport does not identify the organisation or clinician responsible for the report.",
-    why: ({ profileName }) =>
-      `A person may read a name in the report text, but ${profileName} software cannot reliably identify who issued or interpreted it without a structured reference.`,
-    fix: "Link DiagnosticReport.performer to the reporting organisation and resultsInterpreter to the interpreting clinician.",
-  },
-  "source-report-access": {
-    resourceType: "DiagnosticReport",
-    fields: ["presentedForm"],
-    finding: () => "The candidate does not keep a link or attachment for the issued PDF report.",
-    why: ({ profileName }) =>
-      `${profileName} needs access to the original report when a clinician wants to verify the structured data.`,
-    fix: "Add the issued report as a DiagnosticReport.presentedForm attachment or URL.",
-  },
-  "imaging-study-link": {
-    resourceType: "DiagnosticReport",
-    fields: ["imagingStudy"],
-    finding: () => "The DiagnosticReport is not linked to its ImagingStudy resource.",
-    why: ({ profileName }) =>
-      `${profileName} cannot reliably connect the written result to the corresponding imaging study without this reference.`,
-    fix: "Add DiagnosticReport.imagingStudy with a reference to the matching ImagingStudy resource.",
-  },
-  "imaging-identifiers": {
-    resourceType: "ImagingStudy",
-    fields: ["identifier"],
-    finding: ({ candidateText }) =>
-      hasNarrativeImagingIdentifiers(candidateText)
-        ? "The accession number and DICOM Study UID appear in report text, but ImagingStudy.identifier does not structure them."
-        : "ImagingStudy.identifier does not contain both the accession number and DICOM Study UID.",
-    why: ({ profileName }) =>
-      `${profileName} uses these identifiers to match the FHIR record to the correct imaging order and DICOM study. Narrative text is not a reliable system key.`,
-    fix: "Add typed accession and DICOM UID entries to ImagingStudy.identifier.",
-  },
-  "imaging-context": {
-    resourceType: "ImagingStudy",
-    fields: ["modality", "series.bodySite"],
-    finding: ({ candidateText }) =>
-      hasNarrativeImagingContext(candidateText)
-        ? "The report describes the examination, but ImagingStudy does not structure both modality and body site."
-        : "ImagingStudy does not contain structured modality and body-site data.",
-    why: ({ profileName }) =>
-      `${profileName} needs structured imaging context for routing, search and downstream workflow rules.`,
-    fix: "Add ImagingStudy.modality and ImagingStudy.series.bodySite using supported coding systems.",
-  },
 };
 
 const fallbackGuidance = (requirement: ProfileRequirementResult): RequirementGuidance => ({
   resourceType: null,
   fields: [requirement.evidencePath],
   finding: () => requirement.detail,
-  why: ({ profileName }) =>
-    `${profileName} marked this requirement for attention before the candidate can be used in its workflow.`,
+  why: () =>
+    "The pathology benchmark marked this requirement for attention before the candidate can be used downstream.",
   fix: `Update the candidate at ${requirement.evidencePath} and run the assessment again.`,
 });
 
@@ -215,6 +185,7 @@ export const buildRequirementEvidence = (
     profileName,
     candidateText,
     resourceTypes: candidate.resources.map((resource) => resource.resourceType),
+    requirement,
   };
   const missingFields = target
     ? guidance.fields.filter((field) => !hasValueAtPath(target.resource, field))
