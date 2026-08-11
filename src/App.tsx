@@ -160,6 +160,12 @@ type UploadState = {
   candidateOutputs: File[];
 };
 
+type ActiveEvaluationProgress = {
+  key: string;
+  evaluationId: string;
+  startedAt: string;
+};
+
 type CapabilityInputState = {
   cda: File[];
   pdf: File[];
@@ -806,7 +812,7 @@ const workflowStageMeta: Record<
     title: "Applying the organisation rules",
     detail: "Checking each requirement and preparing evidence for any field that needs attention.",
     progress: 74,
-    ceiling: 96,
+    ceiling: 99,
     stepIndex: 4,
   },
   COMPLETED: {
@@ -830,11 +836,26 @@ const getWorkflowStageMeta = (stage: string) =>
     stepIndex: 1,
   };
 
-const WorkflowProgress = ({ stage }: { stage: string }) => {
-  const activeIndex = getWorkflowStageMeta(stage).stepIndex;
+const visualProgressStages: Array<{ start: number; stage: WorkflowStageId }> = [
+  { start: 0, stage: "UPLOADING_FILES" },
+  { start: 17, stage: "QUEUED" },
+  { start: 28, stage: "VALIDATING_INPUT" },
+  { start: 42, stage: "BUILDING_CASES" },
+  { start: 56, stage: "LOADING_OUTPUTS" },
+  { start: 74, stage: "SCORING" },
+  { start: 96, stage: "COMPLETED" },
+];
 
+const getVisualProgressMeta = (progress: number) => {
+  const visualStage = [...visualProgressStages]
+    .reverse()
+    .find((item) => progress >= item.start)?.stage ?? "UPLOADING_FILES";
+  return workflowStageMeta[visualStage];
+};
+
+const WorkflowProgress = ({ activeIndex }: { activeIndex: number }) => {
   return (
-    <div className="workflow-progress" aria-label={`Workflow stage: ${stage}`}>
+    <div className="workflow-progress" aria-label={`Workflow step ${activeIndex + 1} of ${workflowSteps.length}`}>
       {workflowSteps.map((label, index) => (
         <div
           className={index < activeIndex ? "complete" : index === activeIndex ? "active" : ""}
@@ -850,40 +871,56 @@ const WorkflowProgress = ({ stage }: { stage: string }) => {
 
 const EvaluationProgressCard = ({
   evaluationId,
+  progressKey,
   startedAt,
   stage,
   profileName,
+  isComplete,
+  onFinished,
 }: {
   evaluationId: string;
+  progressKey: string;
   startedAt: string;
   stage: string;
   profileName: string | null;
+  isComplete: boolean;
+  onFinished: () => void;
 }) => {
-  const stageMeta = getWorkflowStageMeta(stage);
+  const backendStageMeta = getWorkflowStageMeta(stage);
   const [displayedProgress, setDisplayedProgress] = useState(2);
+  const [allowedCeiling, setAllowedCeiling] = useState(backendStageMeta.ceiling);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
     setDisplayedProgress(2);
-  }, [startedAt]);
+    setAllowedCeiling(backendStageMeta.ceiling);
+  }, [progressKey]);
 
   useEffect(() => {
-    const frameId = window.requestAnimationFrame(() => {
-      setDisplayedProgress((current) => Math.max(current, stageMeta.progress));
-    });
+    setAllowedCeiling((current) => Math.max(current, backendStageMeta.ceiling));
+  }, [backendStageMeta.ceiling]);
+
+  useEffect(() => {
+    const target = isComplete ? 100 : Math.min(99, allowedCeiling);
     const intervalId = window.setInterval(() => {
       setDisplayedProgress((current) => {
-        if (current >= stageMeta.ceiling) return current;
-        const remaining = stageMeta.ceiling - current;
-        return Math.min(stageMeta.ceiling, current + Math.max(0.35, remaining * 0.08));
+        if (current >= target) return target;
+        const remaining = target - current;
+        const step = isComplete
+          ? Math.min(2.4, Math.max(0.8, remaining * 0.08))
+          : Math.min(0.9, Math.max(0.12, remaining * 0.035));
+        return remaining <= step ? target : current + step;
       });
-    }, 700);
+    }, 120);
 
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      window.clearInterval(intervalId);
-    };
-  }, [stageMeta.ceiling, stageMeta.progress]);
+    return () => window.clearInterval(intervalId);
+  }, [allowedCeiling, isComplete]);
+
+  useEffect(() => {
+    if (!isComplete || displayedProgress < 100) return;
+    const timeoutId = window.setTimeout(onFinished, 350);
+    return () => window.clearTimeout(timeoutId);
+  }, [displayedProgress, isComplete, onFinished]);
 
   useEffect(() => {
     const updateElapsed = () => {
@@ -900,11 +937,12 @@ const EvaluationProgressCard = ({
   }, [evaluationId, startedAt]);
 
   const roundedProgress = Math.floor(displayedProgress);
+  const visualStageMeta = getVisualProgressMeta(displayedProgress);
 
   return (
     <section
       className="evaluation-loading-card"
-      aria-busy="true"
+      aria-busy={roundedProgress < 100}
       aria-labelledby="evaluation-loading-title"
       aria-describedby="evaluation-loading-description"
     >
@@ -912,8 +950,8 @@ const EvaluationProgressCard = ({
         <span className="evaluation-loading-icon" aria-hidden="true"><Activity /></span>
         <div>
           <span className="eyebrow">Evaluation in progress</span>
-          <h2 id="evaluation-loading-title">{stageMeta.title}</h2>
-          <p id="evaluation-loading-description" aria-live="polite">{stageMeta.detail}</p>
+          <h2 id="evaluation-loading-title">{visualStageMeta.title}</h2>
+          <p id="evaluation-loading-description" aria-live="polite">{visualStageMeta.detail}</p>
         </div>
         <span className="evaluation-loading-value" aria-hidden="true">
           <strong>{roundedProgress}%</strong>
@@ -928,16 +966,16 @@ const EvaluationProgressCard = ({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={roundedProgress}
-        aria-valuetext={`${stageMeta.title}, approximately ${roundedProgress}% complete`}
+        aria-valuetext={`${visualStageMeta.title}, approximately ${roundedProgress}% complete`}
       >
         <span style={{ width: `${displayedProgress}%` }} />
       </div>
 
-      <WorkflowProgress stage={stage} />
+      <WorkflowProgress activeIndex={visualStageMeta.stepIndex} />
 
       <footer className="evaluation-loading-foot">
         <span><Activity aria-hidden="true" /> Evaluating for {profileName ?? "the selected organisation"}</span>
-        <span>{elapsedSeconds}s elapsed · Results open automatically</span>
+        <span>{isComplete ? "Opening completed results…" : `${elapsedSeconds}s elapsed · Results open automatically`}</span>
       </footer>
     </section>
   );
@@ -2188,6 +2226,8 @@ function App() {
     profileName: string;
   } | null>(null);
   const [lastSubmittedEvaluationId, setLastSubmittedEvaluationId] = useState<string | null>(null);
+  const [activeEvaluationProgress, setActiveEvaluationProgress] =
+    useState<ActiveEvaluationProgress | null>(null);
   const [modelId, setModelId] = useState("gpt-5.4-mini");
   const [notes, setNotes] = useState(
     "Evaluate HL7 CDA/PDF input against generated FHIR JSON for mapping accuracy, unsupported codes, PHI leakage, security failures, and HealthLake readiness.",
@@ -2370,6 +2410,11 @@ function App() {
   const isSelectedEvaluationRunning = ["RUNNING", "UPLOADING"].includes(
     selectedEvaluation.status.toUpperCase(),
   );
+  const selectedProgressSession = activeEvaluationProgress?.evaluationId === selectedEvaluation.id
+    ? activeEvaluationProgress
+    : null;
+  const shouldShowSelectedProgress = isSelectedEvaluationRunning || Boolean(selectedProgressSession);
+  const shouldShowSelectedResult = !isSelectedEvaluationRunning && !selectedProgressSession;
   const selectedDecisionPresentation = profileDecisionPresentation(
     selectedEvaluation.decision,
     selectedEvaluationProfile?.name ?? null,
@@ -2568,6 +2613,11 @@ function App() {
     });
 
     setIsSubmitting(true);
+    setActiveEvaluationProgress({
+      key: pendingId,
+      evaluationId: pendingId,
+      startedAt: createdAt,
+    });
     setEvaluations((current) => [pendingEvaluation, ...current]);
     setSelectedId(pendingId);
     setSelectedRequirement(null);
@@ -2627,6 +2677,11 @@ function App() {
       ]);
       setLastSubmittedEvaluationId(response.evaluationId);
       setSelectedId(response.evaluationId);
+      setActiveEvaluationProgress((current) =>
+        current?.key === pendingId
+          ? { ...current, evaluationId: response.evaluationId }
+          : current,
+      );
       setToast("Files uploaded. The organisation requirements are now being applied.");
 
       try {
@@ -2641,6 +2696,7 @@ function App() {
       }
     } catch (error) {
       setEvaluations((current) => current.filter((item) => item.id !== pendingId));
+      setActiveEvaluationProgress((current) => current?.key === pendingId ? null : current);
       if (!startedEvaluationId) {
         setSelectedId(demoEvaluation.id);
         setView("create");
@@ -2658,6 +2714,9 @@ function App() {
       await deleteEvaluation(pendingDelete.id);
       setEvaluations((current) => current.filter((evaluation) => evaluation.id !== pendingDelete.id));
       if (selectedId === pendingDelete.id) setSelectedId(demoEvaluation.id);
+      setActiveEvaluationProgress((current) =>
+        current?.evaluationId === pendingDelete.id ? null : current,
+      );
       setToast(`Deleted ${pendingDelete.id}.`);
       setPendingDelete(null);
     } catch (error) {
@@ -2702,6 +2761,7 @@ function App() {
       setUploads(defaultUploads());
       setCapabilityInputs({ cda: [], pdf: [] });
       setSelectedProfileId(null);
+      setActiveEvaluationProgress(null);
       setReuseContext(null);
       setSelectedRequirement(null);
       setSelectedCaseId(null);
@@ -3357,16 +3417,23 @@ function App() {
                 <div className="head-actions">{runPicker}</div>
               </div>
 
-              {isSelectedEvaluationRunning ? (
+              {shouldShowSelectedProgress ? (
                 <EvaluationProgressCard
                   evaluationId={selectedEvaluation.id}
-                  startedAt={selectedEvaluation.createdAt}
+                  progressKey={selectedProgressSession?.key ?? selectedEvaluation.id}
+                  startedAt={selectedProgressSession?.startedAt ?? selectedEvaluation.createdAt}
                   stage={selectedEvaluation.stage}
                   profileName={selectedEvaluationProfile?.name ?? null}
+                  isComplete={!isSelectedEvaluationRunning}
+                  onFinished={() => {
+                    setActiveEvaluationProgress((current) =>
+                      current?.evaluationId === selectedEvaluation.id ? null : current,
+                    );
+                  }}
                 />
               ) : null}
 
-              {!isSelectedEvaluationRunning ? (
+              {shouldShowSelectedResult ? (
                 <section
                   className={`result-decision tone-${decisionTone[selectedEvaluation.decision]}`}
                   aria-labelledby="result-decision-title"
@@ -3420,7 +3487,7 @@ function App() {
                 </section>
               ) : null}
 
-              {!isSelectedEvaluationRunning ? (
+              {shouldShowSelectedResult ? (
                 <div className="result-body">
                 <div className="result-main-column">
                   {selectedEvaluation.profileAssessment && selectedEvaluation.cases[0] ? (
