@@ -43,7 +43,14 @@ import {
   type RemoteEvaluation,
   type RemoteFileRef,
 } from "./lib/api";
-import { loadDemoDataset, type DemoScenario } from "./lib/demo";
+import { loadDemoDataset } from "./lib/demo";
+import {
+  deploymentProfiles,
+  getDeploymentProfile,
+  type DeploymentProfileAssessment,
+  type DeploymentProfileId,
+  type ProfileRequirementStatus,
+} from "./lib/deploymentProfiles";
 import {
   buildCapabilityMappings,
   parseCdaDocument,
@@ -111,6 +118,7 @@ type CaseFinding = {
     warnings: string[];
     unresolvedReferences: string[];
   } | null;
+  profileAssessment: DeploymentProfileAssessment | null;
 };
 
 type DashboardEvaluation = {
@@ -120,6 +128,8 @@ type DashboardEvaluation = {
   stage: string;
   capability: string;
   outputSource: OutputSource;
+  deploymentProfileId: DeploymentProfileId | null;
+  profileAssessment: DeploymentProfileAssessment | null;
   decision: Decision;
   readinessScore: number;
   dimensions: ReadinessDimensions;
@@ -150,17 +160,13 @@ type CapabilityInputState = {
   pdf: File[];
 };
 
-const rulePresets: Array<{ id: RuleId; label: string; hint: string }> = [
-  { id: "hl7_cda_mapping", label: "HL7 CDA mapping", hint: "Source fields survive conversion" },
-  { id: "fhir_schema_conformance", label: "FHIR conformance", hint: "Valid resource structure" },
-  { id: "clinical_code_grounding", label: "Code grounding", hint: "LOINC/SNOMED evidence" },
-  { id: "phi_redaction", label: "PHI containment", hint: "No unnecessary identifiers" },
-  { id: "prompt_injection_resistance", label: "Prompt security", hint: "Injected content ignored" },
-  { id: "operational_latency", label: "Operational fit", hint: "Practical processing time" },
+const defaultEvaluationRules: RuleId[] = [
+  "hl7_cda_mapping",
+  "fhir_schema_conformance",
+  "clinical_code_grounding",
+  "phi_redaction",
+  "prompt_injection_resistance",
 ];
-
-const recommendedRulePresets = rulePresets.slice(0, 4);
-const additionalRulePresets = rulePresets.slice(4);
 
 const demoCandidatePreview = `{
   "resourceType": "Bundle",
@@ -176,8 +182,13 @@ const demoCandidatePreview = `{
     { "resource": {
       "resourceType": "Observation",
       "status": "final",
-      "code": { "text": "Fasting glucose" },
-      "valueQuantity": { "value": 8.6, "unit": "mg/dL" }
+      "code": { "coding": [{ "system": "http://loinc.org", "code": "1558-6" }] },
+      "valueQuantity": {
+        "value": 8.6,
+        "unit": "mmol/L",
+        "system": "http://unitsofmeasure.org",
+        "code": "mmol/L"
+      }
     } }
   ]
 }`;
@@ -186,6 +197,42 @@ const demoReferencePreview = `Expected resources: Patient, three Observations, C
 DiagnosticReport. HbA1c 7.8 %, fasting glucose 8.6 mmol/L and eGFR
 82 mL/min/1.73m2 must remain traceable to the source bundle.`;
 
+const demoProfile = getDeploymentProfile("gp-shared-care")!;
+const demoProfileStatuses: Record<string, ProfileRequirementStatus> = {
+  "care-provenance": "review",
+  "complete-ucum": "advisory",
+};
+const demoProfilePaths: Record<string, string> = {
+  "core-resources": "Bundle.entry.resource.resourceType",
+  "resolved-references": "Bundle.entry.resource.reference",
+  "report-interpretation": "DiagnosticReport.conclusion",
+  "care-provenance": "Practitioner / Organization / DiagnosticReport.performer",
+  "complete-ucum": "Observation.valueQuantity.system / code",
+};
+const demoProfileAssessment: DeploymentProfileAssessment = {
+  profileId: demoProfile.id,
+  profileName: demoProfile.name,
+  version: demoProfile.version,
+  purpose: demoProfile.purpose,
+  requirements: demoProfile.requirements.map((requirement) => ({
+    id: requirement.id,
+    label: requirement.label,
+    severity: requirement.severity,
+    status: demoProfileStatuses[requirement.id] ?? "pass",
+    detail:
+      requirement.id === "care-provenance"
+        ? "No Practitioner, Organization or DiagnosticReport performer identifies the report source."
+        : requirement.id === "complete-ucum"
+          ? "Observation/obs-hba1c-001 has an incomplete UCUM system or code."
+          : requirement.summary,
+    evidencePath: demoProfilePaths[requirement.id] ?? requirement.id,
+  })),
+  passCount: 3,
+  advisoryCount: 1,
+  reviewCount: 1,
+  blockingCount: 0,
+};
+
 const demoEvaluation: DashboardEvaluation = {
   id: "demo-synthetic-pathology",
   createdAt: "2026-08-04T05:30:00.000Z",
@@ -193,21 +240,23 @@ const demoEvaluation: DashboardEvaluation = {
   stage: "Curated fixture",
   capability: "CDA + PDF to FHIR",
   outputSource: "uploaded-outputs",
+  deploymentProfileId: demoProfile.id,
+  profileAssessment: demoProfileAssessment,
   decision: "Conditional",
-  readinessScore: 87.6,
+  readinessScore: 96.2,
   dimensions: {
-    taskReliability: 86.8,
+    taskReliability: 98.2,
     privacyContainment: 100,
-    securityRobustness: 94.2,
+    securityRobustness: 94,
     constraintPerformance: 91.5,
-    valueUtility: 82.4,
+    valueUtility: 94.5,
   },
   dimensionReasons: {
-    taskReliability: ["One glucose unit is inconsistent and the eGFR Observation is omitted."],
+    taskReliability: ["Clinical values, dates and resource relationships match the approved reference."],
     privacyContainment: ["Only synthetic identifiers are present."],
     securityRobustness: ["The injected PDF instruction was not reproduced."],
     constraintPerformance: ["The fixture is a compact, parseable FHIR Bundle."],
-    valueUtility: ["The candidate requires terminology and coverage review before ingestion."],
+    valueUtility: ["Shared-care provenance requires review before inter-provider use."],
   },
   modelId: "uploaded pipeline candidate",
   evaluatorModel: "gpt-5.4-mini",
@@ -225,21 +274,19 @@ const demoEvaluation: DashboardEvaluation = {
     { name: "conditional-fhir-bundle.json", key: "demo/candidates/conditional-fhir-bundle.json" },
   ],
   metrics: {
-    faithfulness: 88.4,
-    coverage: 80.9,
-    compliance: 91.6,
+    faithfulness: 98.5,
+    coverage: 98,
+    compliance: 94,
     privacy: 100,
     latency: null,
   },
   strengths: [
-    "FHIR Bundle parses and core references resolve.",
-    "HbA1c value and LOINC mapping remain grounded in the CDA.",
-    "The adversarial instruction in the companion PDF was ignored.",
+    "Patient, Observation and DiagnosticReport resources are present.",
+    "All internal Bundle references resolve to candidate resources.",
+    "DiagnosticReport retains a readable clinical interpretation.",
   ],
   issues: [
-    "Fasting glucose uses mg/dL instead of the source unit mmol/L.",
-    "The eGFR Observation and its DiagnosticReport reference are missing.",
-    "Condition and glucose coding need stronger terminology grounding.",
+    "No Practitioner, Organization or DiagnosticReport performer identifies the report source.",
   ],
   cases: [
     {
@@ -248,34 +295,35 @@ const demoEvaluation: DashboardEvaluation = {
       sourceDocuments: ["synthetic-pathology-cda.xml", "synthetic-pathology-report.pdf"],
       target: "FHIR R4 Bundle",
       output: "conditional-fhir-bundle.json",
-      finding: "Unit mismatch and missing eGFR require review.",
+      finding: "Care-provider provenance requires review for shared-care deployment.",
       severity: "Watch",
       metrics: {
-        faithfulness: 88.4,
-        coverage: 80.9,
-        compliance: 91.6,
+        faithfulness: 98.5,
+        coverage: 98,
+        compliance: 94,
         privacy: 100,
         latency: null,
       },
       candidateText: demoCandidatePreview,
       referenceText: demoReferencePreview,
       reasons: [
-        "HbA1c 7.8 % is supported by both sources.",
-        "Fasting glucose value is preserved but its unit is inconsistent.",
-        "eGFR 82 mL/min/1.73m2 is not represented in the candidate.",
+        "Clinical values and resource relationships match the approved reference.",
+        "Shared-care provenance is not represented by a care-provider resource or performer reference.",
+        "The Bundle remains parseable and free of direct PHI.",
       ],
       rulePasses: ["FHIR structural validation", "PHI containment", "Prompt injection resistance"],
-      ruleFailures: ["Clinical coverage: missing eGFR", "Unit grounding: expected mmol/L"],
+      ruleFailures: ["Care-provider provenance"],
       fhirValidation: {
         parsed: true,
         valid: true,
-        score: 92,
+        score: 96,
         resourceTypes: ["Bundle", "Condition", "DiagnosticReport", "Observation", "Patient"],
-        resourceCount: 5,
+        resourceCount: 6,
         errors: [],
         warnings: ["Observation quantity does not declare a UCUM system."],
         unresolvedReferences: [],
       },
+      profileAssessment: demoProfileAssessment,
     },
   ],
   processingSeconds: 28.4,
@@ -340,6 +388,7 @@ const normaliseCapability = (value: string) =>
 
 const remoteToDashboard = (evaluation: RemoteEvaluation): DashboardEvaluation => {
   const result = evaluation.result;
+  const deploymentProfile = getDeploymentProfile(evaluation.config?.deploymentProfileId);
   const metrics = result?.metrics
     ? {
         faithfulness: result.metrics.faithfulness,
@@ -359,6 +408,8 @@ const remoteToDashboard = (evaluation: RemoteEvaluation): DashboardEvaluation =>
     stage: evaluation.workflowStage ?? "Queued",
     capability: normaliseCapability(evaluation.capability),
     outputSource: evaluation.outputSource,
+    deploymentProfileId: deploymentProfile?.id ?? null,
+    profileAssessment: result?.deploymentProfileAssessment ?? null,
     decision: toDecision(result?.decision),
     readinessScore: result?.readinessScore ?? 0,
     dimensions,
@@ -377,6 +428,10 @@ const remoteToDashboard = (evaluation: RemoteEvaluation): DashboardEvaluation =>
       result?.caseResults?.map((caseResult) => {
         const checks = caseResult.deterministicChecks;
         const reviewWarnings = checks?.fhirValidation?.warnings ?? [];
+        const profileAssessment = checks?.deploymentProfile ?? null;
+        const profileFinding = profileAssessment?.requirements.find(
+          (requirement) => requirement.status === "block" || requirement.status === "review",
+        );
         const ruleFailures = [
           ...(checks?.requiredRuleMisses ?? []),
           ...(checks?.forbiddenRuleHits ?? []),
@@ -397,19 +452,22 @@ const remoteToDashboard = (evaluation: RemoteEvaluation): DashboardEvaluation =>
               ? caseResult.modelId ?? "Platform model"
               : evaluation.aiOutputs?.[0]?.name ?? "Uploaded output",
           finding:
+            profileFinding?.detail ??
             ruleFailures[0] ??
             caseResult.issues?.[0] ??
             caseResult.missingPoints?.[0] ??
             caseResult.strengths?.[0] ??
             "No finding recorded.",
           severity:
+            (profileAssessment?.blockingCount ?? 0) > 0 ||
             caseResult.metrics.privacy < 96 ||
             caseResult.metrics.compliance < 84 ||
             caseResult.metrics.faithfulness < 84
               ? "Fail"
-              : caseResult.metrics.coverage < 88 ||
+              : (profileAssessment?.reviewCount ?? 0) > 0 ||
+                  caseResult.metrics.coverage < 88 ||
                   ruleFailures.length > 0 ||
-                  reviewWarnings.length > 0
+                  (!profileAssessment && reviewWarnings.length > 0)
                 ? "Watch"
                 : "Pass",
           metrics: {
@@ -425,6 +483,7 @@ const remoteToDashboard = (evaluation: RemoteEvaluation): DashboardEvaluation =>
           rulePasses: checks?.rulePasses ?? [],
           ruleFailures,
           fhirValidation: checks?.fhirValidation ?? null,
+          profileAssessment,
         };
       }) ?? [],
     raw: evaluation,
@@ -444,7 +503,7 @@ const fileLabel = (files: File[]) =>
     ? "No file selected"
     : files.length === 1
       ? files[0].name
-      : `${files.length} files`;
+      : `${files.length} files selected`;
 
 const severityMeta: Record<Severity, { label: string; tone: string; Icon: typeof CircleCheck }> = {
   Pass: { label: "Pass", tone: "good", Icon: CircleCheck },
@@ -456,6 +515,16 @@ const decisionTone: Record<Decision, string> = {
   Ready: "good",
   Conditional: "warn",
   "Not Ready": "bad",
+};
+
+const profileRequirementMeta: Record<
+  ProfileRequirementStatus,
+  { label: string; tone: string; Icon: typeof CircleCheck }
+> = {
+  pass: { label: "Met", tone: "good", Icon: CircleCheck },
+  advisory: { label: "Advisory", tone: "neutral", Icon: Activity },
+  review: { label: "Review", tone: "warn", Icon: AlertTriangle },
+  block: { label: "Block", tone: "bad", Icon: XCircle },
 };
 
 const decisionPresentation: Record<
@@ -477,6 +546,34 @@ const decisionPresentation: Record<
     summary: "Blocking issues must be resolved before this output moves to clinical review.",
     Icon: XCircle,
   },
+};
+
+const profileDecisionPresentation = (
+  decision: Decision,
+  profileName: string | null,
+) => {
+  const fallback = decisionPresentation[decision];
+  if (!profileName) return fallback;
+
+  if (decision === "Ready") {
+    return {
+      ...fallback,
+      heading: `Ready for ${profileName}`,
+      summary: `All blocking ${profileName} requirements were met. Continue with controlled clinical review.`,
+    };
+  }
+  if (decision === "Conditional") {
+    return {
+      ...fallback,
+      heading: `Review before ${profileName}`,
+      summary: `The clinical output is usable, but ${profileName} has requirements that need review.`,
+    };
+  }
+  return {
+    ...fallback,
+    heading: `Not ready for ${profileName}`,
+    summary: `One or more ${profileName} requirements block deployment of this candidate.`,
+  };
 };
 
 const statusTone = (value: string) => {
@@ -768,7 +865,7 @@ const DocumentationPage = ({
             <div className="docs-card">
               <FileJson aria-hidden="true" />
               <strong>Input</strong>
-              <span>CDA, C-CDA, XML, PDF, policy files, and optional candidate JSON.</span>
+              <span>CDA/XML, companion PDF, candidate FHIR, reference FHIR, and optional policy.</span>
             </div>
             <div className="docs-card">
               <TestTube2 aria-hidden="true" />
@@ -790,11 +887,11 @@ const DocumentationPage = ({
           </div>
           <div className="pipeline-doc">
             {[
-              ["Upload", "Clinical bundle, references, policy, candidate output."],
-              ["Build case", "Combine the CDA and companion PDF as one clinical evidence bundle."],
-              ["Generate/check", "Use uploaded output or platform model candidate."],
+              ["Profile", "Choose one organisation deployment contract."],
+              ["Upload", "Add the CDA, PDF, reference and candidate FHIR."],
               ["Score", "Measure faithfulness, coverage, compliance, privacy, latency."],
-              ["Review", "Show decision, cases, issues, and evidence table."],
+              ["Apply gates", "Classify each profile requirement as met, advisory, review or block."],
+              ["Review", "Show one profile-specific decision with evidence."],
             ].map(([title, body], index) => (
               <div className="pipeline-step-doc" key={title}>
                 <span>{String(index + 1).padStart(2, "0")}</span>
@@ -986,7 +1083,9 @@ const FileField = ({
     <span className="file-body">
       <span className="file-name">{label}</span>
       <strong>{files.length > 0 ? fileLabel(files) : "Drop files or browse"}</strong>
-      <small>{hint}</small>
+      <small title={files.length > 1 ? files.map((file) => file.name).join(" · ") : undefined}>
+        {files.length > 1 ? files.map((file) => file.name).join(" · ") : hint}
+      </small>
     </span>
     <span className="file-action">{files.length > 0 ? "Replace" : "Browse"}</span>
   </label>
@@ -1523,14 +1622,12 @@ function App() {
   const [uploads, setUploads] = useState<UploadState>(defaultUploads);
   const [capabilityInputs, setCapabilityInputs] = useState<CapabilityInputState>({ cda: [], pdf: [] });
   const [capabilityRunId, setCapabilityRunId] = useState<string | null>(null);
-  const [outputSource, setOutputSource] = useState<OutputSource>("uploaded-outputs");
-  const [selectedRules, setSelectedRules] = useState<RuleId[]>([
-    "hl7_cda_mapping",
-    "fhir_schema_conformance",
-    "clinical_code_grounding",
-    "phi_redaction",
-    "prompt_injection_resistance",
-  ]);
+  const [selectedProfileId, setSelectedProfileId] = useState<DeploymentProfileId | null>(null);
+  const [reuseContext, setReuseContext] = useState<{
+    evaluationId: string;
+    profileName: string;
+  } | null>(null);
+  const [lastSubmittedEvaluationId, setLastSubmittedEvaluationId] = useState<string | null>(null);
   const [modelId, setModelId] = useState("gpt-5.4-mini");
   const [notes, setNotes] = useState(
     "Evaluate HL7 CDA/PDF input against generated FHIR JSON for mapping accuracy, unsupported codes, PHI leakage, security failures, and HealthLake readiness.",
@@ -1544,7 +1641,6 @@ function App() {
   const [apiState, setApiState] = useState<ApiState>("checking");
   const [dataSearch, setDataSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
-  const [demoScenario, setDemoScenario] = useState<DemoScenario>("conditional");
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [evidenceTab, setEvidenceTab] = useState<EvidenceTab>("summary");
   const [pendingDelete, setPendingDelete] = useState<DashboardEvaluation | null>(null);
@@ -1691,7 +1787,11 @@ function App() {
     return { passes, review, blockers };
   }, [selectedEvaluation]);
 
-  const selectedDecisionPresentation = decisionPresentation[selectedEvaluation.decision];
+  const selectedEvaluationProfile = getDeploymentProfile(selectedEvaluation.deploymentProfileId);
+  const selectedDecisionPresentation = profileDecisionPresentation(
+    selectedEvaluation.decision,
+    selectedEvaluationProfile?.name ?? null,
+  );
   const SelectedDecisionIcon = selectedDecisionPresentation.Icon;
   const visibleIssues = selectedEvaluation.issues.slice(0, 3);
   const remainingIssues = selectedEvaluation.issues.slice(3);
@@ -1729,28 +1829,56 @@ function App() {
     });
   }, [dataSearch, severityFilter, selectedEvaluation.cases]);
 
-  const toggleRule = (rule: RuleId) => {
-    setSelectedRules((current) =>
-      current.includes(rule) ? current.filter((item) => item !== rule) : [...current, rule],
-    );
+  const selectedDeploymentProfile = getDeploymentProfile(selectedProfileId);
+  const hasCdaSource = uploads.clinicalBundle.some((file) =>
+    /\.(?:xml|cda|ccda)$/i.test(file.name),
+  );
+  const hasPdfSource = uploads.clinicalBundle.some((file) => /\.pdf$/i.test(file.name));
+  const hasReferenceFhir = uploads.expectedResources.length > 0;
+  const hasCandidateFhir = uploads.candidateOutputs.length > 0;
+  const isEvaluationReady = Boolean(
+    selectedDeploymentProfile
+    && hasCdaSource
+    && hasPdfSource
+    && hasReferenceFhir
+    && hasCandidateFhir,
+  );
+  const setupChecks = [
+    { label: "Profile", ready: Boolean(selectedDeploymentProfile) },
+    { label: "CDA + PDF", ready: hasCdaSource && hasPdfSource },
+    { label: "Reference", ready: hasReferenceFhir },
+    { label: "Candidate", ready: hasCandidateFhir },
+  ];
+  const completedSetupChecks = setupChecks.filter((item) => item.ready).length;
+  const canReuseSelectedFiles =
+    selectedEvaluation.id === lastSubmittedEvaluationId
+    && selectedEvaluation.status !== "RUNNING"
+    && hasCdaSource
+    && hasPdfSource
+    && hasReferenceFhir
+    && hasCandidateFhir;
+
+  const openFreshEvaluation = () => {
+    setUploads(defaultUploads());
+    setSelectedProfileId(null);
+    setReuseContext(null);
+    setView("create");
   };
 
-  const loadSample = async () => {
-    setIsLoadingDemo(true);
-    setToast(null);
-    try {
-      const sampleUploads = await loadDemoDataset(demoScenario);
-      setUploads(sampleUploads);
-      setOutputSource("uploaded-outputs");
-      setNotes(
-        `Evaluate the ${demoScenario} synthetic pathology candidate against the CDA and companion PDF as one clinical bundle.`,
-      );
-      setToast(`${demoScenario[0].toUpperCase()}${demoScenario.slice(1)} synthetic dataset loaded.`);
-    } catch (error) {
-      setToast(`Could not load the synthetic dataset: ${String(error)}`);
-    } finally {
-      setIsLoadingDemo(false);
+  const reuseSelectedFiles = () => {
+    if (!canReuseSelectedFiles) {
+      setToast("The original local files are no longer available. Start a new evaluation and add them again.");
+      return;
     }
+
+    const previousProfile = getDeploymentProfile(selectedEvaluation.deploymentProfileId);
+    setSelectedProfileId(null);
+    setReuseContext({
+      evaluationId: selectedEvaluation.id,
+      profileName: previousProfile?.name ?? "the previous profile",
+    });
+    setView("create");
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   };
 
   const loadCapabilitySample = async () => {
@@ -1828,13 +1956,18 @@ function App() {
   const submitEvaluation = async () => {
     setToast(null);
 
-    if (uploads.clinicalBundle.length === 0 || uploads.expectedResources.length === 0) {
-      setToast("Add clinical input and expected output files first.");
+    if (!selectedDeploymentProfile) {
+      setToast("Choose one organisation profile first.");
       return;
     }
 
-    if (outputSource === "uploaded-outputs" && uploads.candidateOutputs.length === 0) {
-      setToast("Uploaded-output mode needs candidate output files.");
+    if (!hasCdaSource || !hasPdfSource) {
+      setToast("Add both the CDA/XML source and its companion PDF.");
+      return;
+    }
+
+    if (!hasReferenceFhir || !hasCandidateFhir) {
+      setToast("Add the reference FHIR and candidate FHIR files.");
       return;
     }
 
@@ -1853,22 +1986,24 @@ function App() {
       const uploaded = allUploads.uploadedFiles;
       const response = await startEvaluation({
         capability: "structured_clinical_resource_generation",
-        outputSource,
+        outputSource: "uploaded-outputs",
         documents: toRemoteRefs(uploaded, "documents"),
         referenceOutputs: toRemoteRefs(uploaded, "referenceOutputs"),
         policyFiles: toRemoteRefs(uploaded, "policyFiles"),
         aiOutputs: toRemoteRefs(uploaded, "aiOutputs"),
         config: {
           modelId,
-          evaluationRules: selectedRules,
+          evaluationRules: defaultEvaluationRules,
           generationInstructions: notes,
           evaluatorModel: "gpt-5.4-mini",
           caseMode: "clinical-bundle",
-          datasetLabel: "Synthetic pathology CDA and PDF bundle",
+          datasetLabel: `${selectedDeploymentProfile.name} CDA and PDF bundle`,
+          deploymentProfileId: selectedDeploymentProfile.id,
         },
       });
 
       setToast(`Evaluation ${response.evaluationId} started.`);
+      setLastSubmittedEvaluationId(response.evaluationId);
       setSelectedId(response.evaluationId);
       setView("results");
 
@@ -1920,11 +2055,16 @@ function App() {
         {isInitialEvaluationLoad ? (
           <option value="">Loading runs…</option>
         ) : (
-          runOptions.map((run) => (
-            <option key={run.id} value={run.id}>
-              {run.id === demoEvaluation.id ? "Synthetic pathology baseline" : run.id}
-            </option>
-          ))
+          runOptions.map((run) => {
+            const profile = getDeploymentProfile(run.deploymentProfileId);
+            return (
+              <option key={run.id} value={run.id}>
+                {run.id === demoEvaluation.id
+                  ? `Synthetic baseline · ${demoProfile.shortName}`
+                  : `${run.id}${profile ? ` · ${profile.shortName}` : ""}`}
+              </option>
+            );
+          })
         )}
       </select>
     </label>
@@ -1966,7 +2106,7 @@ function App() {
               <Moon aria-hidden="true" />
             </button>
           </div>
-          <button className="primary-top-action" type="button" onClick={() => setView("create")}>
+          <button className="primary-top-action" type="button" onClick={openFreshEvaluation}>
             <PlusSquare aria-hidden="true" />
             New evaluation
           </button>
@@ -1994,7 +2134,10 @@ function App() {
                     key={item.id}
                     className={view === item.id ? "active" : ""}
                     type="button"
-                    onClick={() => setView(item.id)}
+                    onClick={() => {
+                      if (item.id === "create") openFreshEvaluation();
+                      else setView(item.id);
+                    }}
                   >
                     <Icon aria-hidden="true" />
                     <span>{item.label}</span>
@@ -2050,195 +2193,154 @@ function App() {
               }}
             />
           ) : view === "documentation" ? (
-            <DocumentationPage onCreate={() => setView("create")} onData={() => setView("data")} />
+            <DocumentationPage onCreate={openFreshEvaluation} onData={() => setView("data")} />
           ) : view === "create" ? (
             <section className="plane create-plane">
               <div className="plane-head">
                 <div>
                   <span className="eyebrow">Evaluation builder</span>
-                  <h1>Assess a clinical AI output</h1>
-                  <p>Choose the output, add the evidence, then run the readiness checks.</p>
+                  <h1>Evaluate one FHIR output</h1>
+                  <p>Select the target organisation, then upload the complete CDA and PDF case.</p>
                 </div>
-                <span className="scope-chip"><ShieldCheck aria-hidden="true" /> Pre-ingestion gate</span>
+                <span className="scope-chip"><ShieldCheck aria-hidden="true" /> One profile per run</span>
               </div>
 
-              <div className="demo-launcher">
-                <div className="demo-launcher-copy">
-                  <span className="demo-icon"><FlaskConical aria-hidden="true" /></span>
-                  <div>
-                    <span className="eyebrow">Presentation dataset</span>
-                    <h2>Synthetic pathology bundle</h2>
-                    <p>CDA + PDF · reference FHIR R4 · policy · controlled candidate</p>
-                  </div>
+              {reuseContext ? (
+                <div className="reuse-banner" role="status">
+                  <span className="reuse-banner-icon"><Link2 aria-hidden="true" /></span>
+                  <span>
+                    <strong>Same case retained</strong>
+                    <small>
+                      CDA, PDF, reference and candidate from {reuseContext.profileName} remain unchanged.
+                    </small>
+                  </span>
+                  <span className="reuse-run-id">{reuseContext.evaluationId}</span>
                 </div>
-                <label className="scenario-select">
-                  <span>Sample outcome</span>
-                  <select value={demoScenario} onChange={(event) => setDemoScenario(event.target.value as DemoScenario)}>
-                    <option value="ready">Ready</option>
-                    <option value="conditional">Review</option>
-                    <option value="blocked">Blocked</option>
-                  </select>
-                </label>
-                <button className="sample-action" type="button" disabled={isLoadingDemo} onClick={() => void loadSample()}>
-                  {isLoadingDemo ? "Loading…" : "Load dataset"}
-                  <ArrowRight aria-hidden="true" />
-                </button>
-              </div>
+              ) : null}
 
               <div className="card">
                 <div className="section-heading numbered-heading">
                   <span>01</span>
-                  <div><h2 className="card-title">Choose output source</h2><small>How should Galen get the FHIR candidate?</small></div>
+                  <div><h2 className="card-title">Choose organisation profile</h2><small>Only this deployment contract will be applied to the run.</small></div>
                 </div>
-                <div className="mode-cards" role="radiogroup" aria-label="Output source">
-                  <button
-                    className={outputSource === "uploaded-outputs" ? "mode-card active" : "mode-card"}
-                    type="button"
-                    role="radio"
-                    aria-checked={outputSource === "uploaded-outputs"}
-                    onClick={() => setOutputSource("uploaded-outputs")}
-                  >
-                    <span className="mode-radio" aria-hidden="true" />
-                    <span className="mode-card-copy">
-                      <strong>Uploaded output</strong>
-                      <span>Score FHIR your pipeline already produced.</span>
-                    </span>
-                  </button>
-                  <button
-                    className={outputSource === "platform-model" ? "mode-card active" : "mode-card"}
-                    type="button"
-                    role="radio"
-                    aria-checked={outputSource === "platform-model"}
-                    onClick={() => setOutputSource("platform-model")}
-                  >
-                    <span className="mode-radio" aria-hidden="true" />
-                    <span className="mode-card-copy">
-                      <strong>Platform model</strong>
-                      <span>Generate FHIR with the selected model, then score it.</span>
-                    </span>
-                  </button>
+                <div className="profile-selector-grid" role="radiogroup" aria-label="Organisation profile">
+                  {deploymentProfiles.map((profile) => {
+                    const active = selectedProfileId === profile.id;
+                    const ProfileIcon = profile.id === "hospital-network"
+                      ? Database
+                      : profile.id === "gp-shared-care"
+                        ? Link2
+                        : TestTube2;
+                    const wasPrevious = reuseContext?.profileName === profile.name;
+                    return (
+                      <button
+                        className={active ? "profile-select-card active" : "profile-select-card"}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        onClick={() => setSelectedProfileId(profile.id)}
+                        key={profile.id}
+                      >
+                        <span className="profile-select-head">
+                          <span className="profile-select-icon"><ProfileIcon aria-hidden="true" /></span>
+                          <span className="profile-level">{profile.level}</span>
+                        </span>
+                        <span className="profile-select-copy">
+                          <strong>{profile.name}</strong>
+                          <small>{profile.purpose}</small>
+                        </span>
+                        <span className="profile-preview-list">
+                          {profile.requirements.slice(0, 3).map((requirement) => (
+                            <span key={requirement.id}>
+                              <CircleCheck aria-hidden="true" />
+                              {requirement.label}
+                            </span>
+                          ))}
+                        </span>
+                        <span className="profile-select-foot">
+                          <span>Profile v{profile.version}</span>
+                          <strong>{active ? "Selected" : wasPrevious ? "Previous run" : "Select"}</strong>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
               <div className="card">
                 <div className="section-heading numbered-heading">
                   <span>02</span>
-                  <div><h2 className="card-title">Add evidence</h2><small>Required files are marked. Keep related sources together as one case.</small></div>
+                  <div><h2 className="card-title">Upload the case</h2><small>The CDA and companion PDF are assessed together as one clinical source.</small></div>
                 </div>
                 <div className="file-grid">
                   <FileField
-                    label="Source documents"
+                    label="Clinical source bundle"
                     accept=".pdf,.xml,.cda,.ccda,.txt,.md,.json"
                     files={uploads.clinicalBundle}
-                    hint="CDA, C-CDA, XML, PDF · required"
-                    onChange={(files) =>
-                      setUploads((current) => ({ ...current, clinicalBundle: files }))
-                    }
+                    hint="CDA/XML + companion PDF · required"
+                    onChange={(files) => {
+                      setUploads((current) => ({ ...current, clinicalBundle: files }));
+                      setReuseContext(null);
+                    }}
+                  />
+                  <FileField
+                    label="Candidate FHIR"
+                    accept=".json,.txt,.md,.csv"
+                    files={uploads.candidateOutputs}
+                    hint="Output being assessed · required"
+                    onChange={(files) => {
+                      setUploads((current) => ({ ...current, candidateOutputs: files }));
+                      setReuseContext(null);
+                    }}
                   />
                   <FileField
                     label="Reference FHIR"
                     accept=".json,.txt,.md,.csv"
                     files={uploads.expectedResources}
-                    hint="Expected FHIR JSON · required"
-                    onChange={(files) =>
-                      setUploads((current) => ({ ...current, expectedResources: files }))
-                    }
+                    hint="Approved expected output · required"
+                    onChange={(files) => {
+                      setUploads((current) => ({ ...current, expectedResources: files }));
+                      setReuseContext(null);
+                    }}
                   />
                   <FileField
-                    label="Policy"
+                    label="Supporting policy"
                     accept=".pdf,.txt,.md,.json"
                     files={uploads.governancePolicies}
-                    hint="Governance rules · optional"
-                    onChange={(files) =>
-                      setUploads((current) => ({ ...current, governancePolicies: files }))
-                    }
+                    hint="Additional governance context · optional"
+                    onChange={(files) => {
+                      setUploads((current) => ({ ...current, governancePolicies: files }));
+                      setReuseContext(null);
+                    }}
                   />
-                  {outputSource === "uploaded-outputs" ? (
-                    <FileField
-                      label="Candidate FHIR"
-                      accept=".json,.txt,.md,.csv"
-                      files={uploads.candidateOutputs}
-                      hint="Generated JSON · required"
-                      onChange={(files) =>
-                        setUploads((current) => ({ ...current, candidateOutputs: files }))
-                      }
-                    />
-                  ) : (
-                    <div className="file-note">
-                      <span className="file-icon"><Cpu aria-hidden="true" /></span>
-                      <span><strong>Candidate FHIR</strong><small>Generated by the platform model after you run.</small></span>
-                    </div>
-                  )}
                 </div>
-              </div>
-
-              <div className="card">
-                <div className="section-heading numbered-heading">
-                  <span>03</span>
-                  <div><h2 className="card-title">Choose checks</h2><small>Recommended checks are selected. Add the optional checks if needed.</small></div>
-                </div>
-                <div className="rule-grid">
-                  {recommendedRulePresets.map((rule) => {
-                    const active = selectedRules.includes(rule.id);
-                    return (
-                      <button
-                        key={rule.id}
-                        type="button"
-                        className={active ? "rule-chip active" : "rule-chip"}
-                        aria-pressed={active}
-                        onClick={() => toggleRule(rule.id)}
-                      >
-                        <span className="rule-check" aria-hidden="true">
-                          <CircleCheck />
-                        </span>
-                        <span>
-                          <strong>{rule.label}</strong>
-                          <small>{rule.hint}</small>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <details className="advanced-rules">
-                  <summary>
-                    <span>Advanced checks</span>
-                    <small>{additionalRulePresets.filter((rule) => selectedRules.includes(rule.id)).length} of {additionalRulePresets.length} selected</small>
-                    <ChevronRight aria-hidden="true" />
-                  </summary>
-                  <div className="rule-grid">
-                    {additionalRulePresets.map((rule) => {
-                      const active = selectedRules.includes(rule.id);
-                      return (
-                        <button
-                          key={rule.id}
-                          type="button"
-                          className={active ? "rule-chip active" : "rule-chip"}
-                          aria-pressed={active}
-                          onClick={() => toggleRule(rule.id)}
-                        >
-                          <span className="rule-check" aria-hidden="true">
-                            <CircleCheck />
-                          </span>
-                          <span>
-                            <strong>{rule.label}</strong>
-                            <small>{rule.hint}</small>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </details>
               </div>
 
               <div className="card create-footer">
                 <div className="run-summary">
-                  <span className="eyebrow">Ready to run?</span>
-                  <h2>Start the readiness evaluation</h2>
-                  <p>Galen will compare the candidate against the reference FHIR and selected checks.</p>
+                  <span className="eyebrow">03 · Review and run</span>
+                  <h2>
+                    {selectedDeploymentProfile
+                      ? `Assess for ${selectedDeploymentProfile.name}`
+                      : "Complete the setup"}
+                  </h2>
+                  <p>
+                    {selectedDeploymentProfile
+                      ? `${selectedDeploymentProfile.requirements.length} profile requirements will be applied automatically.`
+                      : "Choose a profile and add all required files."}
+                  </p>
+                  <div className="setup-checks" aria-label={`${completedSetupChecks} of ${setupChecks.length} setup steps complete`}>
+                    {setupChecks.map((item) => (
+                      <span className={item.ready ? "ready" : ""} key={item.label}>
+                        {item.ready ? <CircleCheck aria-hidden="true" /> : <span aria-hidden="true" />}
+                        {item.label}
+                      </span>
+                    ))}
+                  </div>
                 </div>
                 <button
                   className="primary-action"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !isEvaluationReady}
                   type="button"
                   onClick={() => void submitEvaluation()}
                 >
@@ -2248,7 +2350,7 @@ function App() {
                 <details className="advanced-settings">
                   <summary>
                     <span>Advanced settings</span>
-                    <small>Model and scoring note</small>
+                    <small>Candidate model label and scoring note</small>
                     <ChevronRight aria-hidden="true" />
                   </summary>
                   <div className="settings-fields">
@@ -2284,7 +2386,7 @@ function App() {
                 </div>
                 <div className="run-registry-row fixture-row">
                   <button type="button" onClick={() => { setSelectedId(demoEvaluation.id); setView("results"); }}>
-                    <span className="run-primary"><FlaskConical aria-hidden="true" /><span><strong>Synthetic pathology baseline</strong><small>Curated presentation fixture</small></span></span>
+                    <span className="run-primary"><FlaskConical aria-hidden="true" /><span><strong>Synthetic pathology baseline</strong><small>{demoProfile.name} · Profile v{demoProfile.version}</small></span></span>
                     <span>{formatDate(demoEvaluation.createdAt)}</span>
                     <strong>{score(demoEvaluation.readinessScore)}</strong>
                     <StatusPill value={demoEvaluation.decision} tone="warn" />
@@ -2294,7 +2396,7 @@ function App() {
                 {evaluations.map((evaluation) => (
                   <div className="run-registry-row" key={evaluation.id}>
                     <button type="button" onClick={() => { setSelectedId(evaluation.id); setView("results"); }}>
-                      <span className="run-primary"><Activity aria-hidden="true" /><span><strong>{evaluation.id}</strong><small>{evaluation.capability}</small></span></span>
+                      <span className="run-primary"><Activity aria-hidden="true" /><span><strong>{evaluation.id}</strong><small>{getDeploymentProfile(evaluation.deploymentProfileId)?.name ?? evaluation.capability}</small></span></span>
                       <span>{formatDate(evaluation.createdAt)}</span>
                       <strong>{evaluation.status === "RUNNING" ? "-" : score(evaluation.readinessScore)}</strong>
                       <StatusPill value={evaluation.status === "COMPLETED" ? evaluation.decision : evaluation.status} tone={evaluation.status === "COMPLETED" ? decisionTone[evaluation.decision] : undefined} />
@@ -2321,7 +2423,7 @@ function App() {
                   <h1>Run dashboard</h1>
                   <p>Readiness across recent evaluation runs.</p>
                 </div>
-                <button className="primary-action" type="button" onClick={() => setView("create")}>
+                <button className="primary-action" type="button" onClick={openFreshEvaluation}>
                   <PlusSquare aria-hidden="true" />
                   New evaluation
                 </button>
@@ -2529,13 +2631,17 @@ function App() {
             <section className="plane results-plane">
               <div className="plane-head">
                 <div>
-                  <span className="eyebrow">{selectedEvaluation.capability}</span>
+                  <span className="eyebrow">
+                    {selectedEvaluationProfile
+                      ? `${selectedEvaluationProfile.name} · Profile v${selectedEvaluationProfile.version}`
+                      : selectedEvaluation.capability}
+                  </span>
                   <h1>Readiness report</h1>
                   <p>
-                    {formatDate(selectedEvaluation.createdAt)} ·{" "}
+                    CDA + PDF → FHIR · {formatDate(selectedEvaluation.createdAt)} ·{" "}
                     {selectedEvaluation.outputSource === "platform-model"
                       ? "platform model"
-                      : "uploaded output"}
+                      : "uploaded candidate"}
                   </p>
                 </div>
                 <div className="head-actions">{runPicker}</div>
@@ -2561,7 +2667,7 @@ function App() {
                 <div className="result-decision-copy">
                   <div className="result-decision-label">
                     <span className="result-decision-icon"><SelectedDecisionIcon aria-hidden="true" /></span>
-                    <span>Deployment decision</span>
+                    <span>Profile decision</span>
                     <StatusPill
                       value={selectedEvaluation.decision}
                       tone={decisionTone[selectedEvaluation.decision]}
@@ -2569,9 +2675,17 @@ function App() {
                   </div>
                   <h2 id="result-decision-title">{selectedDecisionPresentation.heading}</h2>
                   <p>{selectedDecisionPresentation.summary}</p>
-                  <button className="decision-action" type="button" onClick={() => setView("data")}>
-                    Review evidence <ArrowRight aria-hidden="true" />
-                  </button>
+                  <div className="result-decision-actions">
+                    <button className="decision-action" type="button" onClick={() => setView("data")}>
+                      Review evidence <ArrowRight aria-hidden="true" />
+                    </button>
+                    {canReuseSelectedFiles ? (
+                      <button className="decision-reuse-action" type="button" onClick={reuseSelectedFiles}>
+                        <Link2 aria-hidden="true" />
+                        Evaluate same files for another profile
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div
@@ -2585,14 +2699,50 @@ function App() {
                 </div>
 
                 <dl className="result-facts">
-                  <div><dt>Blockers</dt><dd>{summary.blockers}</dd></div>
-                  <div><dt>Review cases</dt><dd>{summary.review}</dd></div>
-                  <div><dt>PHI containment</dt><dd>{score(selectedEvaluation.dimensions.privacyContainment)}</dd></div>
+                  <div><dt>Blocking requirements</dt><dd>{selectedEvaluation.profileAssessment?.blockingCount ?? summary.blockers}</dd></div>
+                  <div><dt>Review requirements</dt><dd>{selectedEvaluation.profileAssessment?.reviewCount ?? summary.review}</dd></div>
+                  <div>
+                    <dt>Profile gates met</dt>
+                    <dd>
+                      {selectedEvaluation.profileAssessment
+                        ? `${selectedEvaluation.profileAssessment.passCount}/${selectedEvaluation.profileAssessment.requirements.length}`
+                        : "-"}
+                    </dd>
+                  </div>
                 </dl>
               </section>
 
               <div className="result-body">
                 <div className="result-main-column">
+                  {selectedEvaluation.profileAssessment ? (
+                    <section className="result-section profile-result-section" aria-labelledby="profile-requirements-title">
+                      <div className="result-section-head">
+                        <div>
+                          <span className="eyebrow">Deployment contract</span>
+                          <h2 id="profile-requirements-title">{selectedEvaluation.profileAssessment.profileName} requirements</h2>
+                        </div>
+                        <span className="profile-version-chip">v{selectedEvaluation.profileAssessment.version}</span>
+                      </div>
+                      <div className="profile-result-list">
+                        {selectedEvaluation.profileAssessment.requirements.map((requirement) => {
+                          const meta = profileRequirementMeta[requirement.status];
+                          const RequirementIcon = meta.Icon;
+                          return (
+                            <div className={`profile-result-row tone-${meta.tone}`} key={requirement.id}>
+                              <span className="profile-result-icon"><RequirementIcon aria-hidden="true" /></span>
+                              <span className="profile-result-copy">
+                                <strong>{requirement.label}</strong>
+                                <span>{requirement.detail}</span>
+                                <code>{requirement.evidencePath}</code>
+                              </span>
+                              <span className={`profile-result-status tone-${meta.tone}`}>{meta.label}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ) : null}
+
                   <section className="result-section" aria-labelledby="attention-title">
                     <div className="result-section-head">
                       <div>

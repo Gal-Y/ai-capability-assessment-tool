@@ -67,6 +67,105 @@ SUPPORTED_FHIR_RESOURCE_TYPES = {
     "Procedure",
 }
 
+DEPLOYMENT_PROFILES = {
+    "hospital-network": {
+        "name": "Hospital network",
+        "version": "1.0",
+        "purpose": "Internal clinical record ingestion",
+        "requirements": [
+            {
+                "id": "core-resources",
+                "label": "Core clinical resources",
+                "severity": "block",
+            },
+            {
+                "id": "resolved-references",
+                "label": "Resolved bundle references",
+                "severity": "block",
+            },
+            {
+                "id": "final-statuses",
+                "label": "Final clinical status",
+                "severity": "review",
+            },
+            {
+                "id": "complete-ucum",
+                "label": "Complete UCUM coding",
+                "severity": "advisory",
+            },
+        ],
+    },
+    "gp-shared-care": {
+        "name": "GP shared care",
+        "version": "1.0",
+        "purpose": "Inter-provider clinical handover",
+        "requirements": [
+            {
+                "id": "core-resources",
+                "label": "Core clinical resources",
+                "severity": "block",
+            },
+            {
+                "id": "resolved-references",
+                "label": "Resolved bundle references",
+                "severity": "block",
+            },
+            {
+                "id": "report-interpretation",
+                "label": "Report interpretation",
+                "severity": "review",
+            },
+            {
+                "id": "care-provenance",
+                "label": "Care-provider provenance",
+                "severity": "review",
+            },
+            {
+                "id": "complete-ucum",
+                "label": "Complete UCUM coding",
+                "severity": "advisory",
+            },
+        ],
+    },
+    "pathology-analytics": {
+        "name": "Pathology analytics",
+        "version": "1.0",
+        "purpose": "Structured querying and population analytics",
+        "requirements": [
+            {
+                "id": "core-resources",
+                "label": "Core clinical resources",
+                "severity": "block",
+            },
+            {
+                "id": "resolved-references",
+                "label": "Resolved bundle references",
+                "severity": "block",
+            },
+            {
+                "id": "loinc-observations",
+                "label": "LOINC-coded observations",
+                "severity": "block",
+            },
+            {
+                "id": "complete-ucum",
+                "label": "Complete UCUM coding",
+                "severity": "block",
+            },
+            {
+                "id": "effective-dates",
+                "label": "Effective dates",
+                "severity": "block",
+            },
+            {
+                "id": "final-statuses",
+                "label": "Final clinical status",
+                "severity": "block",
+            },
+        ],
+    },
+}
+
 STOPWORDS = {
     "about",
     "after",
@@ -900,6 +999,304 @@ def validate_fhir_candidate(candidate_text):
     }
 
 
+def get_fhir_resources(payload):
+    if not isinstance(payload, dict):
+        return []
+
+    if payload.get("resourceType") != "Bundle":
+        return [payload]
+
+    return [
+        entry["resource"]
+        for entry in payload.get("entry", [])
+        if isinstance(entry, dict) and isinstance(entry.get("resource"), dict)
+    ]
+
+
+def resource_display(resource, index):
+    resource_type = str(resource.get("resourceType") or "Resource")
+    resource_id = str(resource.get("id") or index)
+    return f"{resource_type}/{resource_id}"
+
+
+def has_loinc_coding(resource):
+    code = resource.get("code")
+    if not isinstance(code, dict):
+        return False
+
+    return any(
+        isinstance(coding, dict)
+        and "loinc.org" in str(coding.get("system", "")).lower()
+        and bool(str(coding.get("code", "")).strip())
+        for coding in code.get("coding", [])
+    )
+
+
+def assess_profile_requirement(requirement_id, payload, resources, validation):
+    resource_types = {
+        str(resource.get("resourceType"))
+        for resource in resources
+        if resource.get("resourceType")
+    }
+    observations = [
+        resource for resource in resources if resource.get("resourceType") == "Observation"
+    ]
+    diagnostic_reports = [
+        resource
+        for resource in resources
+        if resource.get("resourceType") == "DiagnosticReport"
+    ]
+
+    if requirement_id == "core-resources":
+        required = {"Patient", "Observation", "DiagnosticReport"}
+        missing = sorted(required - resource_types)
+        if missing:
+            return (
+                False,
+                "Missing required FHIR resources: " + ", ".join(missing) + ".",
+                "Bundle.entry.resource.resourceType",
+            )
+        return (
+            True,
+            "Patient, Observation and DiagnosticReport resources are present.",
+            "Bundle.entry.resource.resourceType",
+        )
+
+    if requirement_id == "resolved-references":
+        unresolved = validation.get("unresolvedReferences", [])
+        if unresolved:
+            return (
+                False,
+                "Unresolved internal references: " + ", ".join(unresolved[:3]) + ".",
+                "Bundle.entry.resource.reference",
+            )
+        if not validation.get("parsed"):
+            return (
+                False,
+                "References could not be checked because the candidate is not parseable JSON.",
+                "Bundle.entry.resource.reference",
+            )
+        return (
+            True,
+            "All internal Bundle references resolve to candidate resources.",
+            "Bundle.entry.resource.reference",
+        )
+
+    if requirement_id == "final-statuses":
+        final_statuses = {"final", "amended", "corrected", "appended"}
+        targets = observations + diagnostic_reports
+        invalid = [
+            f"{resource_display(resource, index)}={resource.get('status') or 'missing'}"
+            for index, resource in enumerate(targets, start=1)
+            if str(resource.get("status", "")).lower() not in final_statuses
+        ]
+        if invalid:
+            return (
+                False,
+                "Non-final clinical statuses: " + ", ".join(invalid[:3]) + ".",
+                "Observation.status / DiagnosticReport.status",
+            )
+        return (
+            True,
+            "Observations and DiagnosticReport use final clinical statuses.",
+            "Observation.status / DiagnosticReport.status",
+        )
+
+    if requirement_id == "complete-ucum":
+        missing = []
+        for index, observation in enumerate(observations, start=1):
+            quantity = observation.get("valueQuantity")
+            if not isinstance(quantity, dict):
+                continue
+            if (
+                quantity.get("system") != "http://unitsofmeasure.org"
+                or not str(quantity.get("code", "")).strip()
+            ):
+                missing.append(resource_display(observation, index))
+        if missing:
+            return (
+                False,
+                "Incomplete UCUM system or code: " + ", ".join(missing[:3]) + ".",
+                "Observation.valueQuantity.system / code",
+            )
+        return (
+            True,
+            "Every quantitative Observation declares a UCUM system and code.",
+            "Observation.valueQuantity.system / code",
+        )
+
+    if requirement_id == "report-interpretation":
+        has_interpretation = any(
+            bool(str(report.get("conclusion", "")).strip())
+            or bool(report.get("presentedForm"))
+            or bool(report.get("text"))
+            for report in diagnostic_reports
+        )
+        if not has_interpretation:
+            return (
+                False,
+                "DiagnosticReport does not retain a readable conclusion or report narrative.",
+                "DiagnosticReport.conclusion / presentedForm / text",
+            )
+        return (
+            True,
+            "DiagnosticReport retains a readable clinical interpretation.",
+            "DiagnosticReport.conclusion / presentedForm / text",
+        )
+
+    if requirement_id == "care-provenance":
+        has_actor_resource = bool({"Practitioner", "Organization"} & resource_types)
+        has_report_actor = any(
+            bool(report.get("performer")) or bool(report.get("resultsInterpreter"))
+            for report in diagnostic_reports
+        )
+        if not (has_actor_resource or has_report_actor):
+            return (
+                False,
+                "No Practitioner, Organization or DiagnosticReport performer identifies the report source.",
+                "Practitioner / Organization / DiagnosticReport.performer",
+            )
+        return (
+            True,
+            "The report source is represented through a care-provider resource or reference.",
+            "Practitioner / Organization / DiagnosticReport.performer",
+        )
+
+    if requirement_id == "loinc-observations":
+        missing = [
+            resource_display(observation, index)
+            for index, observation in enumerate(observations, start=1)
+            if not has_loinc_coding(observation)
+        ]
+        if missing:
+            return (
+                False,
+                "Missing LOINC coding: " + ", ".join(missing[:3]) + ".",
+                "Observation.code.coding",
+            )
+        return (
+            True,
+            "Every Observation contains a LOINC system and code.",
+            "Observation.code.coding",
+        )
+
+    if requirement_id == "effective-dates":
+        date_fields = {"effectiveDateTime", "effectivePeriod", "effectiveTiming", "issued"}
+        missing = [
+            resource_display(observation, index)
+            for index, observation in enumerate(observations, start=1)
+            if not any(observation.get(field) for field in date_fields)
+        ]
+        if missing:
+            return (
+                False,
+                "Missing structured effective date: " + ", ".join(missing[:3]) + ".",
+                "Observation.effective[x]",
+            )
+        return (
+            True,
+            "Every Observation contains a structured effective date.",
+            "Observation.effective[x]",
+        )
+
+    return False, "This profile requirement is not implemented.", requirement_id
+
+
+def evaluate_deployment_profile(candidate_text, profile_id):
+    profile = DEPLOYMENT_PROFILES.get(str(profile_id or "").strip())
+    if not profile:
+        raise ValueError(f"Unsupported deployment profile: {profile_id}")
+
+    payload = parse_candidate_json(candidate_text)
+    resources = get_fhir_resources(payload)
+    validation = validate_fhir_candidate(candidate_text)
+    requirement_results = []
+
+    for requirement in profile["requirements"]:
+        passed, detail, evidence_path = assess_profile_requirement(
+            requirement["id"], payload, resources, validation
+        )
+        status = "pass" if passed else requirement["severity"]
+        requirement_results.append(
+            {
+                "id": requirement["id"],
+                "label": requirement["label"],
+                "severity": requirement["severity"],
+                "status": status,
+                "detail": detail,
+                "evidencePath": evidence_path,
+            }
+        )
+
+    return {
+        "profileId": str(profile_id),
+        "profileName": profile["name"],
+        "version": profile["version"],
+        "purpose": profile["purpose"],
+        "requirements": requirement_results,
+        "passCount": sum(item["status"] == "pass" for item in requirement_results),
+        "advisoryCount": sum(
+            item["status"] == "advisory" for item in requirement_results
+        ),
+        "reviewCount": sum(item["status"] == "review" for item in requirement_results),
+        "blockingCount": sum(item["status"] == "block" for item in requirement_results),
+    }
+
+
+def aggregate_deployment_profile_assessments(case_results):
+    assessments = [
+        case_result.get("deploymentProfileAssessment")
+        for case_result in case_results
+        if case_result.get("deploymentProfileAssessment")
+    ]
+    if not assessments:
+        return None
+    if len(assessments) == 1:
+        return assessments[0]
+
+    first = assessments[0]
+    status_rank = {"pass": 0, "advisory": 1, "review": 2, "block": 3}
+    aggregated_requirements = []
+
+    for requirement in first["requirements"]:
+        matches = [
+            item
+            for assessment in assessments
+            for item in assessment["requirements"]
+            if item["id"] == requirement["id"]
+        ]
+        worst = max(matches, key=lambda item: status_rank[item["status"]])
+        affected = sum(item["status"] != "pass" for item in matches)
+        aggregated_requirements.append(
+            {
+                **worst,
+                "detail": (
+                    worst["detail"]
+                    if affected <= 1
+                    else f"{affected} of {len(assessments)} cases: {worst['detail']}"
+                ),
+            }
+        )
+
+    return {
+        "profileId": first["profileId"],
+        "profileName": first["profileName"],
+        "version": first["version"],
+        "purpose": first["purpose"],
+        "requirements": aggregated_requirements,
+        "passCount": sum(item["status"] == "pass" for item in aggregated_requirements),
+        "advisoryCount": sum(
+            item["status"] == "advisory" for item in aggregated_requirements
+        ),
+        "reviewCount": sum(
+            item["status"] == "review" for item in aggregated_requirements
+        ),
+        "blockingCount": sum(
+            item["status"] == "block" for item in aggregated_requirements
+        ),
+    }
+
+
 def has_clinical_code(candidate_text):
     lowered = candidate_text.lower()
     explicit_system = any(
@@ -1609,6 +2006,9 @@ def handler(event, _context):
     evaluation_rule_ids = get_selected_evaluation_rules(config)
     legacy_policy_text = str(config.get("policyText", "")).strip()
     evaluator_model = config.get("evaluatorModel") or DEFAULT_EVALUATOR_MODEL
+    deployment_profile_id = str(config.get("deploymentProfileId", "")).strip()
+    if deployment_profile_id and deployment_profile_id not in DEPLOYMENT_PROFILES:
+        raise ValueError(f"Unsupported deployment profile: {deployment_profile_id}")
     resolved_outputs = {
         output["caseId"]: output for output in event.get("resolvedOutputs", [])
     }
@@ -1659,6 +2059,33 @@ def handler(event, _context):
             evaluation_rule_ids,
             test_case.get("inputProfile", {}),
         )
+        deployment_profile_assessment = None
+        if deployment_profile_id:
+            deployment_profile_assessment = evaluate_deployment_profile(
+                candidate_summary_text, deployment_profile_id
+            )
+            deterministic_assessment["checks"]["deploymentProfile"] = (
+                deployment_profile_assessment
+            )
+            profile_penalty = (
+                deployment_profile_assessment["reviewCount"] * 6
+                + deployment_profile_assessment["blockingCount"] * 20
+            )
+            deterministic_assessment["metrics"]["compliance"] = clamp_score(
+                deterministic_assessment["metrics"]["compliance"] - profile_penalty
+            )
+            deterministic_assessment["metricReasons"]["compliance"] = dedupe_ordered(
+                [
+                    (
+                        f"{deployment_profile_assessment['profileName']} profile: "
+                        f"{deployment_profile_assessment['passCount']} met, "
+                        f"{deployment_profile_assessment['reviewCount']} review, "
+                        f"{deployment_profile_assessment['blockingCount']} blocking."
+                    ),
+                    *deterministic_assessment["metricReasons"]["compliance"],
+                ],
+                3,
+            )
         deterministic_metrics = deterministic_assessment["metrics"]
         hybrid_metrics = blend_metric_sets(semantic_metrics, deterministic_metrics)
 
@@ -1706,6 +2133,7 @@ def handler(event, _context):
                 "deterministicMetrics": deterministic_metrics,
                 "deterministicMetricReasons": deterministic_assessment["metricReasons"],
                 "deterministicChecks": deterministic_assessment["checks"],
+                "deploymentProfileAssessment": deployment_profile_assessment,
                 "strengths": dedupe_ordered(evaluation["strengths"], 3),
                 "missingPoints": dedupe_ordered(evaluation["missingPoints"], 5),
                 "issues": dedupe_ordered(evaluation["issues"], 5),
@@ -1769,16 +2197,28 @@ def handler(event, _context):
         processing_seconds,
         event.get("outputSource", "unknown"),
     )
-    review_finding_count = sum(
-        len(case_result.get("deterministicChecks", {}).get("fhirValidation", {}).get("warnings", []))
-        + len(case_result.get("deterministicChecks", {}).get("requiredRuleMisses", []))
-        for case_result in case_results
-    )
-    blocking_finding_count = sum(
-        len(case_result.get("deterministicChecks", {}).get("fhirValidation", {}).get("errors", []))
-        + len(case_result.get("deterministicChecks", {}).get("forbiddenRuleHits", []))
-        for case_result in case_results
-    )
+    deployment_profile_assessment = aggregate_deployment_profile_assessments(case_results)
+    if deployment_profile_assessment:
+        review_finding_count = sum(
+            len(case_result.get("deterministicChecks", {}).get("requiredRuleMisses", []))
+            for case_result in case_results
+        ) + deployment_profile_assessment["reviewCount"]
+        blocking_finding_count = sum(
+            len(case_result.get("deterministicChecks", {}).get("fhirValidation", {}).get("errors", []))
+            + len(case_result.get("deterministicChecks", {}).get("forbiddenRuleHits", []))
+            for case_result in case_results
+        ) + deployment_profile_assessment["blockingCount"]
+    else:
+        review_finding_count = sum(
+            len(case_result.get("deterministicChecks", {}).get("fhirValidation", {}).get("warnings", []))
+            + len(case_result.get("deterministicChecks", {}).get("requiredRuleMisses", []))
+            for case_result in case_results
+        )
+        blocking_finding_count = sum(
+            len(case_result.get("deterministicChecks", {}).get("fhirValidation", {}).get("errors", []))
+            + len(case_result.get("deterministicChecks", {}).get("forbiddenRuleHits", []))
+            for case_result in case_results
+        )
     decision, readiness_score = build_decision(
         readiness_dimensions,
         review_finding_count=review_finding_count,
@@ -1793,6 +2233,20 @@ def handler(event, _context):
         case_results, "deterministicMetricReasons"
     )
     issues, strengths = top_case_findings(case_results)
+
+    if deployment_profile_assessment:
+        profile_issues = [
+            requirement["detail"]
+            for requirement in deployment_profile_assessment["requirements"]
+            if requirement["status"] in {"review", "block"}
+        ]
+        profile_strengths = [
+            requirement["detail"]
+            for requirement in deployment_profile_assessment["requirements"]
+            if requirement["status"] == "pass"
+        ]
+        issues = dedupe_ordered([*profile_issues, *issues], 6)
+        strengths = dedupe_ordered([*profile_strengths, *strengths], 5)
 
     if metrics["faithfulness"] < THRESHOLDS["faithfulness"]:
         issues.insert(
@@ -1819,6 +2273,7 @@ def handler(event, _context):
         "scoredAt": now_iso(),
         "decision": decision,
         "readinessScore": readiness_score,
+        "deploymentProfileAssessment": deployment_profile_assessment,
         "readinessDimensions": readiness_dimensions,
         "readinessDimensionReasons": readiness_dimension_reasons,
         "metrics": metrics,

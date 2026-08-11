@@ -1,3 +1,8 @@
+import type {
+  DeploymentProfileAssessment,
+  DeploymentProfileId,
+} from "./deploymentProfiles";
+
 type OutputSource = "platform-model" | "uploaded-outputs";
 type UploadCategory = "documents" | "referenceOutputs" | "policyFiles" | "aiOutputs";
 
@@ -54,6 +59,7 @@ export type RemoteEvaluation = {
     generationInstructions?: string;
     datasetLabel?: string;
     caseMode?: string;
+    deploymentProfileId?: DeploymentProfileId;
   };
   result?: {
     scoredAt: string;
@@ -78,6 +84,7 @@ export type RemoteEvaluation = {
       };
     };
     decision: "Ready" | "Conditional" | "Not Ready";
+    deploymentProfileAssessment?: DeploymentProfileAssessment;
     readinessDimensions?: ReadinessDimensions;
     readinessDimensionReasons?: Partial<Record<keyof ReadinessDimensions, string[]>>;
     metrics: {
@@ -189,6 +196,7 @@ export type RemoteEvaluation = {
           warnings: string[];
           unresolvedReferences: string[];
         };
+        deploymentProfile?: DeploymentProfileAssessment;
       };
       strengths?: string[];
       missingPoints?: string[];

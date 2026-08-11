@@ -82,6 +82,56 @@ class FhirValidationTests(unittest.TestCase):
         )
         self.assertEqual(SCORING.build_decision(blocked)[0], "Not Ready")
 
+    def test_same_candidate_has_profile_specific_deployment_decisions(self):
+        dimensions = {
+            "taskReliability": 94,
+            "privacyContainment": 99,
+            "securityRobustness": 95,
+            "constraintPerformance": 91,
+            "valueUtility": 93,
+        }
+        expected = {
+            "hospital-network": "Ready",
+            "gp-shared-care": "Conditional",
+            "pathology-analytics": "Not Ready",
+        }
+
+        for profile_id, expected_decision in expected.items():
+            with self.subTest(profile_id=profile_id):
+                assessment = SCORING.evaluate_deployment_profile(
+                    candidate("conditional"), profile_id
+                )
+                decision, _score = SCORING.build_decision(
+                    dimensions,
+                    review_finding_count=assessment["reviewCount"],
+                    blocking_finding_count=assessment["blockingCount"],
+                )
+                self.assertEqual(decision, expected_decision)
+
+    def test_profile_findings_point_to_specific_fhir_fields(self):
+        gp_assessment = SCORING.evaluate_deployment_profile(
+            candidate("conditional"), "gp-shared-care"
+        )
+        pathology_assessment = SCORING.evaluate_deployment_profile(
+            candidate("conditional"), "pathology-analytics"
+        )
+
+        gp_provenance = next(
+            item
+            for item in gp_assessment["requirements"]
+            if item["id"] == "care-provenance"
+        )
+        pathology_ucum = next(
+            item
+            for item in pathology_assessment["requirements"]
+            if item["id"] == "complete-ucum"
+        )
+
+        self.assertEqual(gp_provenance["status"], "review")
+        self.assertIn("DiagnosticReport.performer", gp_provenance["evidencePath"])
+        self.assertEqual(pathology_ucum["status"], "block")
+        self.assertIn("Observation.valueQuantity", pathology_ucum["evidencePath"])
+
     def test_fhir_dates_and_terminology_urls_are_not_phi(self):
         items = SCORING.extract_sensitive_items(
             '"effectiveDateTime":"2026-07-30T09:00:00+10:00",'

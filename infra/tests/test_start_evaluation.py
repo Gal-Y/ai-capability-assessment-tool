@@ -92,6 +92,21 @@ class StartEvaluationApiTests(unittest.TestCase):
         self.assertEqual(result["statusCode"], 400)
         self.assertIn("requires at least one reference output", result["body"])
 
+    def test_unknown_deployment_profile_is_rejected(self):
+        event = request(
+            "uploaded-outputs",
+            reference_outputs=[{"name": "reference.json", "key": "reference/reference.json"}],
+            ai_outputs=[{"name": "candidate.json", "key": "outputs/candidate.json"}],
+        )
+        payload = json.loads(event["body"])
+        payload["config"]["deploymentProfileId"] = "unknown-profile"
+        event["body"] = json.dumps(payload)
+
+        result = START.handler(event, None)
+
+        self.assertEqual(result["statusCode"], 400)
+        self.assertIn("Unsupported deployment profile", result["body"])
+
 
 if __name__ == "__main__":
     unittest.main()

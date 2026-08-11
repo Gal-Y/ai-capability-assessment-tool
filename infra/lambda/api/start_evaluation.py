@@ -11,6 +11,11 @@ dynamodb = boto3.resource("dynamodb")
 stepfunctions = boto3.client("stepfunctions")
 table = dynamodb.Table(os.environ["EVALUATIONS_TABLE"])
 workflow_arn = os.environ["EVALUATION_WORKFLOW_ARN"]
+SUPPORTED_DEPLOYMENT_PROFILES = {
+    "hospital-network",
+    "gp-shared-care",
+    "pathology-analytics",
+}
 
 
 def handler(event, _context):
@@ -23,9 +28,16 @@ def handler(event, _context):
     policy_files = payload.get("policyFiles", [])
     ai_outputs = payload.get("aiOutputs", [])
     config = payload.get("config", {})
+    deployment_profile_id = str(config.get("deploymentProfileId", "")).strip()
 
     if output_source not in {"platform-model", "uploaded-outputs"}:
         return response(400, {"message": "outputSource must be provided"})
+
+    if (
+        deployment_profile_id
+        and deployment_profile_id not in SUPPORTED_DEPLOYMENT_PROFILES
+    ):
+        return response(400, {"message": "Unsupported deployment profile"})
 
     if not documents:
         return response(400, {"message": "At least one document is required"})

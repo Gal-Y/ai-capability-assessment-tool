@@ -22,6 +22,16 @@ A production pipeline might ingest PDF/CDA clinical bundles, use AI to emit FHIR
 4. surface case-level evidence and mitigation gaps
 5. categorise the capability as `Ready`, `Conditional`, or `Not Ready`
 
+Each uploaded-output evaluation is assessed against one versioned organisation profile. The
+clinical facts and candidate FHIR stay fixed; the selected deployment contract determines which
+requirements are advisory, require review, or block deployment.
+
+The prototype includes three built-in profiles:
+
+- `Hospital network`: base clinical-record ingestion, with incomplete UCUM coding advisory only
+- `GP shared care`: adds care-provider provenance and readable report interpretation
+- `Pathology analytics`: requires complete LOINC, UCUM, effective-date, and final-status coding
+
 ## Readiness Dimensions
 
 The current implementation maps the backend's hybrid metrics to the Thesis A framework:
@@ -48,10 +58,10 @@ The app includes:
 
 - a redesigned dark healthcare operator console
 - a thesis-ready demo evaluation for a HealthLake-style PDF/CDA to FHIR pipeline
-- a guided evaluation setup flow
+- a three-step, upload-first evaluation flow: profile, case files, run
 - uploads for clinical bundles, expected structured outputs, governance policies, and candidate AI outputs
-- platform-model or uploaded-output modes
-- healthcare-specific rule presets for FHIR conformance, clinical code grounding, PHI containment, prompt-injection resistance, and operational constraints
+- one organisation profile per evaluation, with a sequential “evaluate the same files for another profile” path
+- profile-controlled rules for core resources, FHIR references, terminology, provenance, dates, and statuses
 - an HL7 CDA mapping rule that checks whether CDA-style source content is represented as FHIR resources such as Patient, Observation, Condition, DiagnosticReport, MedicationRequest, AllergyIntolerance, Encounter, or Procedure
 - case-level evidence cards and mitigation queue
 - AWS-backed evaluation jobs through the existing API, Step Functions, Lambda, S3, and DynamoDB stack
@@ -83,14 +93,15 @@ The CDK stack keeps the original serverless shape:
 
 ### Workflow
 
-1. User uploads synthetic clinical files through presigned S3 URLs.
+1. User selects one organisation profile and uploads synthetic clinical files through presigned S3 URLs.
 2. User starts an evaluation through the API.
 3. Step Functions runs the pipeline:
    - validate input manifest
    - classify uploaded files and persist the HL7 CDA-to-FHIR `inputProfile`
    - build one clinical test case per source document
    - generate platform output or load uploaded candidate output
-   - score each case against source, reference FHIR output, HL7/FHIR rules, and policy context
+   - score each case against source, reference FHIR output, baseline HL7/FHIR rules, and policy context
+   - apply the selected profile's deterministic deployment requirements and severity levels
    - persist final readiness report and status
 
 ### API Endpoints
