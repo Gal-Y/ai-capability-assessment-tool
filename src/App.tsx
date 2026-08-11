@@ -2208,6 +2208,8 @@ function App() {
   const [evidenceTab, setEvidenceTab] = useState<EvidenceTab>("summary");
   const [pendingDelete, setPendingDelete] = useState<DashboardEvaluation | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isClearAllDialogOpen, setIsClearAllDialogOpen] = useState(false);
+  const [isClearingAll, setIsClearingAll] = useState(false);
 
   const runningIdsKey = evaluations
     .filter((evaluation) => evaluation.status === "RUNNING")
@@ -2347,6 +2349,15 @@ function App() {
         : [demoEvaluation, ...evaluations.filter((evaluation) => evaluation.id !== demoEvaluation.id)],
     [evaluations, isLoadingEvaluations],
   );
+
+  const persistedEvaluations = evaluations.filter(
+    (evaluation) => evaluation.id !== demoEvaluation.id,
+  );
+  const activePersistedEvaluations = persistedEvaluations.filter((evaluation) =>
+    ["RUNNING", "UPLOADING", "QUEUED"].includes(evaluation.status.toUpperCase()),
+  );
+  const canClearAllEvaluations =
+    persistedEvaluations.length > 0 && activePersistedEvaluations.length === 0;
 
   const summary = useMemo(() => {
     const passes = selectedEvaluation.cases.filter((item) => item.severity === "Pass").length;
@@ -2653,6 +2664,57 @@ function App() {
       setToast(`Could not delete the run: ${String(error)}`);
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const confirmClearAllEvaluations = async () => {
+    if (!canClearAllEvaluations || isClearingAll) return;
+
+    const evaluationIds = persistedEvaluations.map((evaluation) => evaluation.id);
+    setIsClearingAll(true);
+
+    try {
+      const results = await Promise.allSettled(
+        evaluationIds.map((evaluationId) => deleteEvaluation(evaluationId)),
+      );
+      const removedIds = new Set(
+        evaluationIds.filter((_, index) => results[index].status === "fulfilled"),
+      );
+      const failedCount = evaluationIds.length - removedIds.size;
+
+      setEvaluations((current) =>
+        current.filter((evaluation) => !removedIds.has(evaluation.id)),
+      );
+      if (removedIds.has(selectedId)) setSelectedId(demoEvaluation.id);
+      if (capabilityRunId && removedIds.has(capabilityRunId)) setCapabilityRunId(null);
+      if (lastSubmittedEvaluationId && removedIds.has(lastSubmittedEvaluationId)) {
+        setLastSubmittedEvaluationId(null);
+      }
+      setIsClearAllDialogOpen(false);
+
+      if (failedCount > 0) {
+        setToast(
+          `Removed ${removedIds.size} evaluation${removedIds.size === 1 ? "" : "s"}. ${failedCount} could not be removed; try again.`,
+        );
+        return;
+      }
+
+      setUploads(defaultUploads());
+      setCapabilityInputs({ cda: [], pdf: [] });
+      setSelectedProfileId(null);
+      setReuseContext(null);
+      setSelectedRequirement(null);
+      setSelectedCaseId(null);
+      setEvidenceTab("summary");
+      setDataSearch("");
+      setSeverityFilter("all");
+      setView("create");
+      setToast(
+        `Removed ${evaluationIds.length} evaluation${evaluationIds.length === 1 ? "" : "s"}. Start a new evaluation below.`,
+      );
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    } finally {
+      setIsClearingAll(false);
     }
   };
 
@@ -2999,6 +3061,29 @@ function App() {
                   <span className="eyebrow">Run registry</span>
                   <h1>Evaluation history</h1>
                   <p>Open, compare or remove persisted AWS evaluation runs.</p>
+                </div>
+                <div className="run-registry-actions">
+                  <button
+                    className="clear-runs-action"
+                    type="button"
+                    disabled={!canClearAllEvaluations}
+                    title={
+                      activePersistedEvaluations.length > 0
+                        ? "Wait for active evaluations to finish before removing all runs."
+                        : persistedEvaluations.length === 0
+                          ? "There are no saved evaluations to remove."
+                          : "Remove all persisted evaluation runs."
+                    }
+                    onClick={() => setIsClearAllDialogOpen(true)}
+                  >
+                    <Trash2 aria-hidden="true" />
+                    Remove all evaluations
+                  </button>
+                  <small>
+                    {activePersistedEvaluations.length > 0
+                      ? `${activePersistedEvaluations.length} still processing`
+                      : `${persistedEvaluations.length} saved`}
+                  </small>
                 </div>
               </div>
               <div className="card run-registry">
@@ -3468,10 +3553,55 @@ function App() {
             <span className="modal-icon"><Trash2 aria-hidden="true" /></span>
             <h2 id="delete-run-title">Delete this evaluation?</h2>
             <p>{pendingDelete.id} and its uploaded demo files will be removed from AWS.</p>
-            <div>
+            <div className="modal-actions">
               <button className="secondary-action" type="button" disabled={isDeleting} onClick={() => setPendingDelete(null)}>Cancel</button>
               <button className="danger-action" type="button" disabled={isDeleting} onClick={() => void confirmDelete()}>
                 {isDeleting ? "Deleting…" : "Delete run"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isClearAllDialogOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={() => !isClearingAll && setIsClearAllDialogOpen(false)}
+        >
+          <div
+            className="confirm-modal clear-runs-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="clear-runs-title"
+            aria-describedby="clear-runs-description"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <span className="modal-icon"><Trash2 aria-hidden="true" /></span>
+            <h2 id="clear-runs-title">Remove all evaluations?</h2>
+            <p id="clear-runs-description">
+              This permanently deletes {persistedEvaluations.length} saved AWS evaluation{persistedEvaluations.length === 1 ? "" : "s"} and their uploaded files.
+            </p>
+            <ul className="clear-runs-summary">
+              <li><CircleCheck aria-hidden="true" /><span>The built-in synthetic example stays available</span></li>
+              <li><PlusSquare aria-hidden="true" /><span>New Evaluation opens with a blank setup</span></li>
+            </ul>
+            <div className="modal-actions">
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={isClearingAll}
+                onClick={() => setIsClearAllDialogOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="danger-action"
+                type="button"
+                disabled={isClearingAll}
+                onClick={() => void confirmClearAllEvaluations()}
+              >
+                {isClearingAll ? "Removing evaluations…" : "Remove all"}
               </button>
             </div>
           </div>
