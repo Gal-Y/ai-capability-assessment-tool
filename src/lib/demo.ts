@@ -1,5 +1,3 @@
-export type DemoScenario = "ready" | "conditional" | "blocked";
-
 export type DemoUploadState = {
   clinicalBundle: File[];
   expectedResources: File[];
@@ -12,7 +10,7 @@ type DemoManifest = {
     clinicalBundle: string[];
     reference: string[];
     policy: string[];
-    candidates: Record<DemoScenario, string>;
+    candidate: string;
   };
 };
 
@@ -33,7 +31,7 @@ const fetchAsFile = async (path: string): Promise<File> => {
   });
 };
 
-export const loadDemoDataset = async (scenario: DemoScenario): Promise<DemoUploadState> => {
+export const loadDemoDataset = async (): Promise<DemoUploadState> => {
   const response = await fetch("/demo/manifest.json");
   if (!response.ok) {
     throw new Error("Demo manifest is unavailable");
@@ -45,7 +43,7 @@ export const loadDemoDataset = async (scenario: DemoScenario): Promise<DemoUploa
       Promise.all(manifest.files.clinicalBundle.map(fetchAsFile)),
       Promise.all(manifest.files.reference.map(fetchAsFile)),
       Promise.all(manifest.files.policy.map(fetchAsFile)),
-      Promise.all([fetchAsFile(manifest.files.candidates[scenario])]),
+      Promise.all([fetchAsFile(manifest.files.candidate)]),
     ]);
 
   return {

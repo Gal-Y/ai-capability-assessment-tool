@@ -12,9 +12,9 @@ stepfunctions = boto3.client("stepfunctions")
 table = dynamodb.Table(os.environ["EVALUATIONS_TABLE"])
 workflow_arn = os.environ["EVALUATION_WORKFLOW_ARN"]
 SUPPORTED_DEPLOYMENT_PROFILES = {
-    "hospital-network",
-    "gp-shared-care",
-    "pathology-analytics",
+    "hospital",
+    "gp-clinic",
+    "radiology-practice",
 }
 
 

@@ -3,7 +3,7 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 export type ClinicalSourceFact = {
   id: string;
   source: "CDA" | "PDF";
-  kind: "patient" | "practitioner" | "organization" | "observation" | "condition" | "report";
+  kind: "patient" | "practitioner" | "organization" | "observation" | "condition" | "report" | "imaging";
   label: string;
   value: string;
   code?: string;
@@ -228,6 +228,51 @@ export const parseCdaDocument = async (file: File): Promise<CdaOverview> => {
     });
   }
 
+  const serviceEvent = firstElement(root, "serviceEvent");
+  const serviceEventId = serviceEvent
+    ? directChild(serviceEvent, "id")?.getAttribute("extension")
+    : null;
+  const serviceEventCode = serviceEvent ? directChild(serviceEvent, "code") : null;
+  const serviceEventTime = serviceEvent ? directChild(serviceEvent, "effectiveTime") : null;
+  const serviceEventStart = serviceEventTime
+    ? directChild(serviceEventTime, "low")?.getAttribute("value")
+    : null;
+
+  if (serviceEventId) {
+    facts.push({
+      id: "imaging-accession",
+      source: "CDA",
+      kind: "imaging",
+      label: "Accession number",
+      value: serviceEventId,
+      sourcePath: "documentationOf.serviceEvent.id.extension",
+    });
+  }
+  if (serviceEventCode) {
+    facts.push({
+      id: "imaging-procedure",
+      source: "CDA",
+      kind: "imaging",
+      label: serviceEventCode.getAttribute("displayName") ?? "Imaging procedure",
+      value: [codeSystemLabel(serviceEventCode), serviceEventCode.getAttribute("code")]
+        .filter(Boolean)
+        .join(" · "),
+      code: serviceEventCode.getAttribute("code") ?? undefined,
+      system: codeSystemLabel(serviceEventCode),
+      sourcePath: "documentationOf.serviceEvent.code",
+    });
+  }
+  if (serviceEventStart) {
+    facts.push({
+      id: "imaging-start",
+      source: "CDA",
+      kind: "imaging",
+      label: "Study date",
+      value: formatCdaDate(serviceEventStart),
+      sourcePath: "documentationOf.serviceEvent.effectiveTime.low.value",
+    });
+  }
+
   elements(root, "observation").forEach((observation, index) => {
     const codeElement = directChild(observation, "code");
     const valueElement = directChild(observation, "value");
@@ -408,6 +453,10 @@ const resourceLabel = (resource: Record<string, unknown>) => {
     return [given, family].filter(Boolean).join(" ") || `${resourceType} context`;
   }
   if (resourceType === "Organization") return stringValue(resource.name) || "Organization context";
+  if (resourceType === "ImagingStudy") {
+    const modality = asRecord(asArray(resource.modality)[0]);
+    return stringValue(modality?.display) || stringValue(modality?.code) || "Imaging study";
+  }
   return coding.display || coding.code || stringValue(resource.id) || resourceType;
 };
 
@@ -418,6 +467,13 @@ const resourceDetail = (resource: Record<string, unknown>) => {
   if (resourceType === "DiagnosticReport") {
     const results = asArray(resource.result).length;
     return `${results} linked observation${results === 1 ? "" : "s"}`;
+  }
+  if (resourceType === "ImagingStudy") {
+    const identifiers = asArray(resource.identifier).length;
+    const started = stringValue(resource.started);
+    return [started, `${identifiers} structured identifier${identifiers === 1 ? "" : "s"}`]
+      .filter(Boolean)
+      .join(" · ");
   }
   if (resourceType === "Patient") {
     const identifier = asRecord(asArray(resource.identifier)[0]);
@@ -538,6 +594,7 @@ export const buildCapabilityMappings = (
   const observations = resources.filter((item) => item.resourceType === "Observation");
   const conditions = resources.filter((item) => item.resourceType === "Condition");
   const report = resources.find((item) => item.resourceType === "DiagnosticReport");
+  const imagingStudy = resources.find((item) => item.resourceType === "ImagingStudy");
 
   cda.facts.forEach((fact) => {
     let target: FhirResourceView | undefined;
@@ -606,6 +663,27 @@ export const buildCapabilityMappings = (
         const coding = codingFor(target.resource);
         targetValue = [coding.display, coding.code].filter(Boolean).join(" · ");
       }
+    } else if (fact.kind === "imaging") {
+      if (fact.id === "imaging-procedure") {
+        target = report;
+        if (report) {
+          const coding = codingFor(report.resource);
+          targetPath = "DiagnosticReport.code";
+          targetValue = [coding.display, coding.code].filter(Boolean).join(" · ");
+        }
+      } else {
+        target = imagingStudy;
+        if (imagingStudy && fact.id === "imaging-accession") {
+          const identifier = asArray(imagingStudy.resource.identifier)
+            .map(asRecord)
+            .find((item) => stringValue(item?.value) === fact.value);
+          targetPath = "ImagingStudy.identifier[accession].value";
+          targetValue = stringValue(identifier?.value);
+        } else if (imagingStudy) {
+          targetPath = "ImagingStudy.started";
+          targetValue = stringValue(imagingStudy.resource.started);
+        }
+      }
     }
 
     const targetResource = target ? `${target.resourceType}/${target.id}` : "No matching resource";
@@ -645,18 +723,24 @@ export const buildCapabilityMappings = (
 
   if (pdf && report) {
     const conclusion = stringValue(report.resource.conclusion);
-    const narrativePage = pdf.pages.find((page) =>
-      normalized(page.text).includes("known type 2 diabetes mellitus"),
-    );
-    const narrative = narrativePage?.lines
-      .filter((line) =>
-        /clinical context|known type 2 diabetes|glycaemic management|egfr result/i.test(line),
-      )
-      .join(" ");
+    const normalizedConclusion = normalized(conclusion);
+    const narrativePage = pdf.pages.find(
+      (page) => normalizedConclusion && normalized(page.text).includes(normalizedConclusion),
+    ) ?? pdf.pages.find((page) => /impression|conclusion/i.test(page.text));
+    const impressionIndex = narrativePage?.lines.findIndex((line) =>
+      /impression|conclusion/i.test(line),
+    ) ?? -1;
+    const narrative = narrativePage
+      ? impressionIndex >= 0
+        ? narrativePage.lines.slice(impressionIndex, impressionIndex + 3).join(" ")
+        : narrativePage.lines.find((line) =>
+            normalizedConclusion && normalized(line).includes(normalizedConclusion),
+          ) ?? ""
+      : "";
     mappings.push({
       id: "map-pdf-conclusion",
       source: "PDF",
-      sourceLabel: "Pathology narrative",
+      sourceLabel: "Report impression",
       sourceValue: narrative || "Human-readable companion evidence",
       sourcePath: `PDF page ${narrativePage?.pageNumber ?? 1}`,
       targetResource: `DiagnosticReport/${report.id}`,
@@ -664,8 +748,108 @@ export const buildCapabilityMappings = (
       targetValue: conclusion || "No conclusion generated",
       status: conclusion ? "Mapped" : "Review",
       sourcePage: narrativePage?.pageNumber ?? 1,
-      matchTerms: ["Clinical context", "Known type 2 diabetes mellitus", "glycaemic management"],
+      matchTerms: ["IMPRESSION", conclusion].filter(Boolean),
     });
+
+    const pdfLines = pdf.pages.flatMap((page) =>
+      page.lines.map((line) => ({ line, pageNumber: page.pageNumber })),
+    );
+    const reportingOrganization = pdfLines.find(({ line }) =>
+      /diagnostic imaging|medical imaging|radiology (?:practice|service|centre|center)/i.test(line),
+    );
+    const credentialIndex = pdfLines.findIndex(({ line }) =>
+      /FRANZCR|radiologist|electronically signed/i.test(line),
+    );
+    const interpreterSource = credentialIndex >= 0
+      ? pdfLines
+          .slice(Math.max(0, credentialIndex - 1), credentialIndex + 1)
+          .map(({ line }) => line)
+          .join(" ")
+      : "";
+    const performer = asRecord(asArray(report.resource.performer)[0]);
+    const interpreter = asRecord(asArray(report.resource.resultsInterpreter)[0]);
+    if (reportingOrganization) {
+      mappings.push({
+        id: "map-pdf-report-source",
+        source: "PDF",
+        sourceLabel: "Reporting organisation",
+        sourceValue: reportingOrganization.line,
+        sourcePath: `PDF page ${reportingOrganization.pageNumber} · letterhead`,
+        targetResource: `DiagnosticReport/${report.id}`,
+        targetPath: "DiagnosticReport.performer",
+        targetValue: stringValue(performer?.reference) || "Not structured",
+        status: performer ? "Mapped" : "Review",
+        sourcePage: reportingOrganization.pageNumber,
+        matchTerms: [reportingOrganization.line],
+      });
+    }
+    if (interpreterSource) {
+      mappings.push({
+        id: "map-pdf-interpreter",
+        source: "PDF",
+        sourceLabel: "Results interpreter",
+        sourceValue: interpreterSource,
+        sourcePath: `PDF page ${pdfLines[credentialIndex].pageNumber} · signature`,
+        targetResource: `DiagnosticReport/${report.id}`,
+        targetPath: "DiagnosticReport.resultsInterpreter",
+        targetValue: stringValue(interpreter?.reference) || "Not structured",
+        status: interpreter ? "Mapped" : "Review",
+        sourcePage: pdfLines[credentialIndex].pageNumber,
+        matchTerms: interpreterSource.split(/\s+/).filter((term) => term.length > 3),
+      });
+    }
+
+    if (imagingStudy) {
+      const identifiers = asArray(imagingStudy.resource.identifier).map(asRecord);
+      const dicomIdentifier = identifiers.find((item) => item?.system === "urn:dicom:uid");
+      const modality = asRecord(asArray(imagingStudy.resource.modality)[0]);
+      const series = asRecord(asArray(imagingStudy.resource.series)[0]);
+      const bodySite = asRecord(series?.bodySite);
+      const dicomUid = pdf.rawText.match(
+        /DICOM\s+(?:STUDY\s+)?UID\s*[:#-]?\s*((?:\d+\.)+\d+)/i,
+      )?.[1];
+      const sourceModality = pdf.rawText.match(/MODALITY\s*:\s*([A-Z0-9]+)/i)?.[1];
+      const sourceBodySite = pdf.rawText.match(
+        /BODY(?:\s+SITE)?\s*:\s*([A-Z][A-Z ]{1,30}?)(?=\s+(?:ACC|ACCESSION|DICOM)|\n|$)/i,
+      )?.[1]?.trim();
+
+      if (dicomUid) {
+        mappings.push({
+          id: "map-pdf-dicom-uid",
+          source: "PDF",
+          sourceLabel: "DICOM Study UID",
+          sourceValue: dicomUid,
+          sourcePath: "PDF page 1 · archive footer",
+          targetResource: `ImagingStudy/${imagingStudy.id}`,
+          targetPath: "ImagingStudy.identifier[DICOM UID]",
+          targetValue: stringValue(dicomIdentifier?.value) || "Not structured",
+          status: dicomIdentifier ? "Mapped" : "Review",
+          sourcePage: 1,
+          matchTerms: ["DICOM STUDY UID", dicomUid],
+        });
+      }
+      if (sourceModality || sourceBodySite) {
+        mappings.push({
+          id: "map-pdf-imaging-context",
+          source: "PDF",
+          sourceLabel: "Modality and body site",
+          sourceValue: [sourceModality && `MODALITY: ${sourceModality}`, sourceBodySite && `BODY: ${sourceBodySite}`]
+            .filter(Boolean)
+            .join("   "),
+          sourcePath: "PDF page 1 · technical footer",
+          targetResource: `ImagingStudy/${imagingStudy.id}`,
+          targetPath: "ImagingStudy.modality / series.bodySite",
+          targetValue: [stringValue(modality?.code), stringValue(bodySite?.display)]
+            .filter(Boolean)
+            .join(" · ") || "Not structured",
+          status: modality && bodySite ? "Mapped" : "Review",
+          sourcePage: 1,
+          matchTerms: ["MODALITY", sourceModality, "BODY", sourceBodySite].filter(
+            (term): term is string => Boolean(term),
+          ),
+        });
+      }
+    }
   }
 
   return mappings;

@@ -1,5 +1,4 @@
 import importlib.util
-import json
 from pathlib import Path
 import sys
 import types
@@ -37,33 +36,39 @@ def load_scoring_module():
 SCORING = load_scoring_module()
 
 
-def candidate(name):
-    return (ROOT / f"public/demo/candidates/{name}-fhir-bundle.json").read_text()
+def candidate():
+    return (
+        ROOT / "public/demo/candidates/controlled-radiology-fhir-bundle.json"
+    ).read_text()
+
+
+def reference():
+    return (
+        ROOT / "public/demo/reference/expected-radiology-fhir-bundle.json"
+    ).read_text()
 
 
 class FhirValidationTests(unittest.TestCase):
-    def test_ready_fixture_is_structurally_valid(self):
-        result = SCORING.validate_fhir_candidate(candidate("ready"))
+    def test_controlled_candidate_is_structurally_valid(self):
+        result = SCORING.validate_fhir_candidate(candidate())
 
         self.assertTrue(result["parsed"])
         self.assertTrue(result["valid"])
         self.assertEqual(result["score"], 100)
-        self.assertEqual(result["resourceCount"], 6)
+        self.assertEqual(result["resourceCount"], 3)
+        self.assertEqual(
+            result["resourceTypes"],
+            ["DiagnosticReport", "ImagingStudy", "Patient"],
+        )
         self.assertEqual(result["unresolvedReferences"], [])
 
-    def test_conditional_fixture_surfaces_profile_warnings(self):
-        result = SCORING.validate_fhir_candidate(candidate("conditional"))
+    def test_complete_reference_is_structurally_valid(self):
+        result = SCORING.validate_fhir_candidate(reference())
 
         self.assertTrue(result["valid"])
-        self.assertLess(result["score"], 100)
-        self.assertEqual(len(result["warnings"]), 1)
-
-    def test_blocked_fixture_rejects_unresolved_reference(self):
-        result = SCORING.validate_fhir_candidate(candidate("blocked"))
-
-        self.assertFalse(result["valid"])
-        self.assertIn("urn:uuid:missing-patient", result["unresolvedReferences"])
-        self.assertTrue(any("Unresolved Bundle references" in item for item in result["errors"]))
+        self.assertEqual(result["score"], 100)
+        self.assertEqual(result["resourceCount"], 5)
+        self.assertEqual(result["unresolvedReferences"], [])
 
     def test_readiness_decision_uses_all_five_dimension_gates(self):
         ready = {
@@ -91,15 +96,15 @@ class FhirValidationTests(unittest.TestCase):
             "valueUtility": 93,
         }
         expected = {
-            "hospital-network": "Ready",
-            "gp-shared-care": "Conditional",
-            "pathology-analytics": "Not Ready",
+            "hospital": "Ready",
+            "gp-clinic": "Conditional",
+            "radiology-practice": "Not Ready",
         }
 
         for profile_id, expected_decision in expected.items():
             with self.subTest(profile_id=profile_id):
                 assessment = SCORING.evaluate_deployment_profile(
-                    candidate("conditional"), profile_id
+                    candidate(), profile_id
                 )
                 decision, _score = SCORING.build_decision(
                     dimensions,
@@ -110,27 +115,41 @@ class FhirValidationTests(unittest.TestCase):
 
     def test_profile_findings_point_to_specific_fhir_fields(self):
         gp_assessment = SCORING.evaluate_deployment_profile(
-            candidate("conditional"), "gp-shared-care"
+            candidate(), "gp-clinic"
         )
-        pathology_assessment = SCORING.evaluate_deployment_profile(
-            candidate("conditional"), "pathology-analytics"
+        radiology_assessment = SCORING.evaluate_deployment_profile(
+            candidate(), "radiology-practice"
         )
 
-        gp_provenance = next(
+        gp_report_source = next(
             item
             for item in gp_assessment["requirements"]
-            if item["id"] == "care-provenance"
+            if item["id"] == "structured-report-source"
         )
-        pathology_ucum = next(
+        radiology_identifiers = next(
             item
-            for item in pathology_assessment["requirements"]
-            if item["id"] == "complete-ucum"
+            for item in radiology_assessment["requirements"]
+            if item["id"] == "imaging-identifiers"
+        )
+        radiology_context = next(
+            item
+            for item in radiology_assessment["requirements"]
+            if item["id"] == "imaging-context"
         )
 
-        self.assertEqual(gp_provenance["status"], "review")
-        self.assertIn("DiagnosticReport.performer", gp_provenance["evidencePath"])
-        self.assertEqual(pathology_ucum["status"], "block")
-        self.assertIn("Observation.valueQuantity", pathology_ucum["evidencePath"])
+        self.assertEqual(gp_report_source["status"], "review")
+        self.assertIn("DiagnosticReport.performer", gp_report_source["evidencePath"])
+        self.assertEqual(radiology_identifiers["status"], "block")
+        self.assertIn("ImagingStudy.identifier", radiology_identifiers["evidencePath"])
+        self.assertEqual(radiology_context["status"], "block")
+        self.assertIn("ImagingStudy.modality", radiology_context["evidencePath"])
+
+    def test_hospital_accepts_the_controlled_candidate_with_advisories_only(self):
+        assessment = SCORING.evaluate_deployment_profile(candidate(), "hospital")
+
+        self.assertEqual(assessment["reviewCount"], 0)
+        self.assertEqual(assessment["blockingCount"], 0)
+        self.assertEqual(assessment["advisoryCount"], 2)
 
     def test_fhir_dates_and_terminology_urls_are_not_phi(self):
         items = SCORING.extract_sensitive_items(
@@ -140,13 +159,6 @@ class FhirValidationTests(unittest.TestCase):
 
         self.assertFalse(any(item["label"] == "phone number" for item in items))
         self.assertFalse(any(item["label"] == "url" for item in items))
-
-    def test_blocked_fixture_contains_the_security_test_artifact(self):
-        payload = json.loads(candidate("blocked"))
-        text = json.dumps(payload)
-
-        self.assertTrue(SCORING.has_prompt_injection_artifact(text))
-
 
 if __name__ == "__main__":
     unittest.main()

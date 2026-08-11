@@ -14,7 +14,7 @@ The product is no longer framed as a generic enterprise AI assessment tool. It i
 
 This is an evaluation tool, not the production converter itself.
 
-A production pipeline might ingest PDF/CDA clinical bundles, use AI to emit FHIR JSON, store resources in AWS HealthLake, and then query longitudinal pathology trends for recommendations. This prototype wraps that kind of pipeline with a readiness layer:
+A production pipeline might use deterministic CDA mappings for clinical context and AI to extract PDF-only report content into FHIR JSON. This prototype evaluates whether that conversion capability is ready for a specific organisation:
 
 1. upload synthetic HL7 CDA/PDF clinical inputs and expected FHIR outputs
 2. generate or upload candidate AI outputs
@@ -22,15 +22,16 @@ A production pipeline might ingest PDF/CDA clinical bundles, use AI to emit FHIR
 4. surface case-level evidence and mitigation gaps
 5. categorise the capability as `Ready`, `Conditional`, or `Not Ready`
 
-Each uploaded-output evaluation is assessed against one versioned organisation profile. The
-clinical facts and candidate FHIR stay fixed; the selected deployment contract determines which
-requirements are advisory, require review, or block deployment.
+Each evaluation assesses one organisation's own CDA/PDF-to-FHIR converter against a versioned
+set of requirements. In the demo, the source evidence, complete reference, and controlled
+candidate stay fixed. Only the organisation requirements change, showing that technical accuracy
+is necessary but deployment readiness is context-dependent.
 
 The prototype includes three built-in profiles:
 
-- `Hospital network`: base clinical-record ingestion, with incomplete UCUM coding advisory only
-- `GP shared care`: adds care-provider provenance and readable report interpretation
-- `Pathology analytics`: requires complete LOINC, UCUM, effective-date, and final-status coding
+- `Hospital`: accepts a clinically faithful report while treating missing structured imaging metadata as advisory
+- `GP clinic`: requires report-source traceability, so the same output needs review
+- `Radiology practice`: requires structured DICOM/accession identifiers, modality, body site, and reporting responsibility, so the same output is blocked
 
 ## Readiness Dimensions
 
@@ -57,12 +58,12 @@ The workflow now records an `inputProfile` during validation. The profile classi
 The app includes:
 
 - a redesigned dark healthcare operator console
-- a thesis-ready demo evaluation for a HealthLake-style PDF/CDA to FHIR pipeline
+- a thesis-ready synthetic chest X-ray demo for a CDA/PDF-to-FHIR pipeline
 - a three-step, upload-first evaluation flow: profile, case files, run
 - uploads for clinical bundles, expected structured outputs, governance policies, and candidate AI outputs
-- one organisation profile per evaluation, with a sequential “evaluate the same files for another profile” path
-- profile-controlled rules for core resources, FHIR references, terminology, provenance, dates, and statuses
-- an HL7 CDA mapping rule that checks whether CDA-style source content is represented as FHIR resources such as Patient, Observation, Condition, DiagnosticReport, MedicationRequest, AllergyIntolerance, Encounter, or Procedure
+- one organisation requirement set per evaluation, with a sequential “evaluate the same files for another profile” path
+- organisation-controlled rules for core resources, FHIR references, report interpretation, provenance, imaging identifiers, modality, body site, attachments, and status
+- an HL7 CDA mapping rule that checks whether CDA-style source content is represented as appropriate FHIR resources, including Patient, DiagnosticReport, and ImagingStudy for the radiology demo
 - case-level evidence cards and mitigation queue
 - AWS-backed evaluation jobs through the existing API, Step Functions, Lambda, S3, and DynamoDB stack
 
@@ -93,7 +94,7 @@ The CDK stack keeps the original serverless shape:
 
 ### Workflow
 
-1. User selects one organisation profile and uploads synthetic clinical files through presigned S3 URLs.
+1. User selects one organisation's requirements and uploads the synthetic radiology files through presigned S3 URLs.
 2. User starts an evaluation through the API.
 3. Step Functions runs the pipeline:
    - validate input manifest

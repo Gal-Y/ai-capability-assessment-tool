@@ -21,6 +21,7 @@ import {
   Moon,
   PlusSquare,
   Play,
+  ScanLine,
   Search,
   ShieldCheck,
   Sun,
@@ -171,42 +172,40 @@ const demoCandidatePreview = `{
   "resourceType": "Bundle",
   "type": "collection",
   "entry": [
-    { "resource": { "resourceType": "Patient", "id": "patient-syn-001" } },
+    { "resource": { "resourceType": "Patient", "id": "patient-syn-rad-001" } },
     { "resource": {
-      "resourceType": "Observation",
-      "status": "final",
-      "code": { "coding": [{ "system": "http://loinc.org", "code": "4548-4" }] },
-      "valueQuantity": { "value": 7.8, "unit": "%" }
+      "resourceType": "ImagingStudy",
+      "id": "imaging-study-001",
+      "status": "available",
+      "started": "2026-08-11T10:14:00+10:00"
     } },
     { "resource": {
-      "resourceType": "Observation",
+      "resourceType": "DiagnosticReport",
       "status": "final",
-      "code": { "coding": [{ "system": "http://loinc.org", "code": "1558-6" }] },
-      "valueQuantity": {
-        "value": 8.6,
-        "unit": "mmol/L",
-        "system": "http://unitsofmeasure.org",
-        "code": "mmol/L"
-      }
+      "imagingStudy": [{ "reference": "urn:uuid:imaging-study-001" }],
+      "conclusion": "No acute cardiopulmonary abnormality.",
+      "presentedForm": [{ "contentType": "application/pdf" }]
     } }
   ]
 }`;
 
-const demoReferencePreview = `Expected resources: Patient, three Observations, Condition and
-DiagnosticReport. HbA1c 7.8 %, fasting glucose 8.6 mmol/L and eGFR
-82 mL/min/1.73m2 must remain traceable to the source bundle.`;
+const demoReferencePreview = `Expected resources: Patient, Organization, Practitioner,
+ImagingStudy and DiagnosticReport. The reference structures the reporting organisation,
+radiologist, DICOM Study UID, accession, modality and body site.`;
 
-const demoProfile = getDeploymentProfile("gp-shared-care")!;
+const demoProfile = getDeploymentProfile("gp-clinic")!;
 const demoProfileStatuses: Record<string, ProfileRequirementStatus> = {
-  "care-provenance": "review",
-  "complete-ucum": "advisory",
+  "structured-report-source": "review",
+  "imaging-identifiers": "advisory",
 };
 const demoProfilePaths: Record<string, string> = {
-  "core-resources": "Bundle.entry.resource.resourceType",
+  "clinical-report-core": "Bundle.entry.resource.resourceType",
+  "report-interpretation": "DiagnosticReport.conclusion / text / presentedForm",
+  "structured-report-source": "DiagnosticReport.performer / resultsInterpreter",
   "resolved-references": "Bundle.entry.resource.reference",
-  "report-interpretation": "DiagnosticReport.conclusion",
-  "care-provenance": "Practitioner / Organization / DiagnosticReport.performer",
-  "complete-ucum": "Observation.valueQuantity.system / code",
+  "final-report-status": "DiagnosticReport.status",
+  "source-report-access": "DiagnosticReport.presentedForm",
+  "imaging-identifiers": "ImagingStudy.identifier",
 };
 const demoProfileAssessment: DeploymentProfileAssessment = {
   profileId: demoProfile.id,
@@ -219,22 +218,22 @@ const demoProfileAssessment: DeploymentProfileAssessment = {
     severity: requirement.severity,
     status: demoProfileStatuses[requirement.id] ?? "pass",
     detail:
-      requirement.id === "care-provenance"
-        ? "No Practitioner, Organization or DiagnosticReport performer identifies the report source."
-        : requirement.id === "complete-ucum"
-          ? "Observation/obs-hba1c-001 has an incomplete UCUM system or code."
+      requirement.id === "structured-report-source"
+        ? "DiagnosticReport does not structure the report source as a performer or results interpreter."
+        : requirement.id === "imaging-identifiers"
+          ? "ImagingStudy narrative retains the identifiers, but ImagingStudy.identifier is empty."
           : requirement.summary,
     evidencePath: demoProfilePaths[requirement.id] ?? requirement.id,
   })),
-  passCount: 3,
+  passCount: 5,
   advisoryCount: 1,
   reviewCount: 1,
   blockingCount: 0,
 };
 
 const demoEvaluation: DashboardEvaluation = {
-  id: "demo-synthetic-pathology",
-  createdAt: "2026-08-04T05:30:00.000Z",
+  id: "demo-synthetic-radiology",
+  createdAt: "2026-08-11T00:42:00.000Z",
   status: "DEMO",
   stage: "Curated fixture",
   capability: "CDA + PDF to FHIR",
@@ -242,63 +241,61 @@ const demoEvaluation: DashboardEvaluation = {
   deploymentProfileId: demoProfile.id,
   profileAssessment: demoProfileAssessment,
   decision: "Conditional",
-  readinessScore: 96.2,
+  readinessScore: 97.1,
   dimensions: {
-    taskReliability: 98.2,
+    taskReliability: 98.0,
     privacyContainment: 100,
-    securityRobustness: 94,
-    constraintPerformance: 91.5,
-    valueUtility: 94.5,
+    securityRobustness: 96,
+    constraintPerformance: 92.0,
+    valueUtility: 95.0,
   },
   dimensionReasons: {
-    taskReliability: ["Clinical values, dates and resource relationships match the approved reference."],
+    taskReliability: ["The examination, findings, impression, dates and resource relationships match the source."],
     privacyContainment: ["Only synthetic identifiers are present."],
-    securityRobustness: ["The injected PDF instruction was not reproduced."],
+    securityRobustness: ["The candidate contains no unsupported clinical or operational instructions."],
     constraintPerformance: ["The fixture is a compact, parseable FHIR Bundle."],
-    valueUtility: ["Shared-care provenance requires review before inter-provider use."],
+    valueUtility: ["The GP profile requires structured report attribution before deployment."],
   },
   modelId: "uploaded pipeline candidate",
   evaluatorModel: "gpt-5.4-mini",
   documents: [
-    { name: "synthetic-pathology-cda.xml", key: "demo/synthetic-pathology-cda.xml" },
-    { name: "synthetic-pathology-report.pdf", key: "demo/synthetic-pathology-report.pdf" },
+    { name: "synthetic-radiology-cda.xml", key: "demo/synthetic-radiology-cda.xml" },
+    { name: "synthetic-radiology-report.pdf", key: "demo/synthetic-radiology-report.pdf" },
   ],
   referenceOutputs: [
-    { name: "expected-fhir-bundle.json", key: "demo/reference/expected-fhir-bundle.json" },
+    { name: "expected-radiology-fhir-bundle.json", key: "demo/reference/expected-radiology-fhir-bundle.json" },
   ],
-  policyFiles: [
-    { name: "healthcare-deployment-policy.md", key: "demo/policy/healthcare-deployment-policy.md" },
-  ],
+  policyFiles: [],
   aiOutputs: [
-    { name: "conditional-fhir-bundle.json", key: "demo/candidates/conditional-fhir-bundle.json" },
+    { name: "controlled-radiology-fhir-bundle.json", key: "demo/candidates/controlled-radiology-fhir-bundle.json" },
   ],
   metrics: {
-    faithfulness: 98.5,
-    coverage: 98,
+    faithfulness: 98.4,
+    coverage: 97.2,
     compliance: 94,
     privacy: 100,
     latency: null,
   },
   strengths: [
-    "Patient, Observation and DiagnosticReport resources are present.",
+    "Patient and DiagnosticReport resources are present.",
     "All internal Bundle references resolve to candidate resources.",
-    "DiagnosticReport retains a readable clinical interpretation.",
+    "DiagnosticReport retains the complete findings and readable impression.",
   ],
   issues: [
-    "No Practitioner, Organization or DiagnosticReport performer identifies the report source.",
+    "DiagnosticReport does not structure the report source as a performer or results interpreter.",
   ],
   cases: [
     {
       id: "EV-001",
-      source: "CDA + pathology PDF",
-      sourceDocuments: ["synthetic-pathology-cda.xml", "synthetic-pathology-report.pdf"],
+      source: "CDA + radiology PDF",
+      sourceDocuments: ["synthetic-radiology-cda.xml", "synthetic-radiology-report.pdf"],
       target: "FHIR R4 Bundle",
-      output: "conditional-fhir-bundle.json",
-      finding: "Care-provider provenance requires review for shared-care deployment.",
+      output: "controlled-radiology-fhir-bundle.json",
+      finding: "Structured report attribution requires GP review.",
       severity: "Watch",
       metrics: {
-        faithfulness: 98.5,
-        coverage: 98,
+        faithfulness: 98.4,
+        coverage: 97.2,
         compliance: 94,
         privacy: 100,
         latency: null,
@@ -306,20 +303,20 @@ const demoEvaluation: DashboardEvaluation = {
       candidateText: demoCandidatePreview,
       referenceText: demoReferencePreview,
       reasons: [
-        "Clinical values and resource relationships match the approved reference.",
-        "Shared-care provenance is not represented by a care-provider resource or performer reference.",
+        "The examination, findings, impression and resource relationships match the approved reference.",
+        "The PDF names the organisation and radiologist, but the candidate does not map them into performer fields.",
         "The Bundle remains parseable and free of direct PHI.",
       ],
       rulePasses: ["FHIR structural validation", "PHI containment", "Prompt injection resistance"],
-      ruleFailures: ["Care-provider provenance"],
+      ruleFailures: ["Structured report source"],
       fhirValidation: {
         parsed: true,
         valid: true,
-        score: 96,
-        resourceTypes: ["Bundle", "Condition", "DiagnosticReport", "Observation", "Patient"],
-        resourceCount: 6,
+        score: 100,
+        resourceTypes: ["DiagnosticReport", "ImagingStudy", "Patient"],
+        resourceCount: 3,
         errors: [],
-        warnings: ["Observation quantity does not declare a UCUM system."],
+        warnings: [],
         unresolvedReferences: [],
       },
       profileAssessment: demoProfileAssessment,
@@ -684,7 +681,7 @@ const workflowStageMeta: Record<
   },
   BUILDING_CASES: {
     title: "Building the assessment case",
-    detail: "Organising source evidence and the selected deployment contract.",
+    detail: "Organising source evidence and the selected organisation requirements.",
     progress: 38,
   },
   LOADING_OUTPUTS: {
@@ -783,7 +780,7 @@ const EvaluationProgressCard = ({
       <WorkflowProgress stage={stage} />
 
       <footer className="evaluation-loading-foot">
-        <span><Activity aria-hidden="true" /> Evaluating for {profileName ?? "the selected profile"}</span>
+        <span><Activity aria-hidden="true" /> Evaluating for {profileName ?? "the selected organisation"}</span>
         <span>Results will appear automatically. No refresh needed.</span>
       </footer>
     </section>
@@ -906,11 +903,10 @@ const fhirExample = `{
     },
     {
       "resource": {
-        "resourceType": "Observation",
-        "status": "final",
-        "code": { "coding": [{ "system": "http://loinc.org", "code": "718-7" }] },
-        "subject": { "reference": "urn:uuid:patient-1" },
-        "valueQuantity": { "value": 132, "unit": "g/L" }
+        "resourceType": "ImagingStudy",
+        "status": "available",
+        "modality": [{ "system": "http://dicom.nema.org/resources/ontology/DCM", "code": "DX" }],
+        "subject": { "reference": "urn:uuid:patient-1" }
       }
     }
   ]
@@ -993,11 +989,11 @@ const DocumentationPage = ({
           </div>
           <div className="pipeline-doc">
             {[
-              ["Profile", "Choose one organisation deployment contract."],
+              ["Organisation", "Choose whose converter is being assessed."],
               ["Upload", "Add the CDA, PDF, reference and candidate FHIR."],
               ["Score", "Measure faithfulness, coverage, compliance, privacy, latency."],
-              ["Apply gates", "Classify each profile requirement as met, advisory, review or block."],
-              ["Review", "Show one profile-specific decision with evidence."],
+              ["Apply gates", "Classify each organisation requirement as met, advisory, review or block."],
+              ["Review", "Show one organisation-specific decision with evidence."],
             ].map(([title, body], index) => (
               <div className="pipeline-step-doc" key={title}>
                 <span>{String(index + 1).padStart(2, "0")}</span>
@@ -1048,9 +1044,8 @@ const DocumentationPage = ({
             <h2>FHIR output</h2>
           </div>
           <p>
-            FHIR represents healthcare data as modular resources. This prototype focuses on a
-            Bundle containing resources such as Patient, Observation, DiagnosticReport, Condition,
-            and MedicationRequest.
+            FHIR represents healthcare data as modular resources. The controlled demo focuses on a
+            radiology Bundle containing Patient, DiagnosticReport and ImagingStudy resources.
           </p>
           <div className="schema-grid">
             <div className="schema-card">
@@ -1058,9 +1053,9 @@ const DocumentationPage = ({
               <dl>
                 <div><dt>Bundle</dt><dd>Container for resources and exchange payloads.</dd></div>
                 <div><dt>Patient</dt><dd>Identity, demographics, identifiers.</dd></div>
-                <div><dt>Observation</dt><dd>Measurements and simple clinical assertions.</dd></div>
-                <div><dt>DiagnosticReport</dt><dd>Report context and linked observations.</dd></div>
-                <div><dt>Condition</dt><dd>Problems, diagnoses, and clinical status.</dd></div>
+                <div><dt>DiagnosticReport</dt><dd>Report context, narrative and clinical impression.</dd></div>
+                <div><dt>ImagingStudy</dt><dd>Study identifiers, modality and imaging context.</dd></div>
+                <div><dt>Organization</dt><dd>Diagnostic service responsible for the report.</dd></div>
               </dl>
             </div>
             <pre className="code-panel" aria-label="FHIR Bundle example">
@@ -1112,18 +1107,21 @@ const DocumentationPage = ({
             <h2>Demo</h2>
           </div>
           <ol className="demo-list">
-            <li>Open New evaluation and load the synthetic pathology dataset.</li>
-            <li>Show the CDA and PDF companion evidence, reference FHIR, policy, and candidate output.</li>
-            <li>Run the evaluation and wait for the workflow to complete.</li>
-            <li>Use Results to explain the five readiness dimensions and final decision.</li>
-            <li>Open Evidence to trace FHIR checks back to source and reference content.</li>
+            <li>Upload the synthetic radiology CDA, PDF, candidate FHIR and reference FHIR.</li>
+            <li>Show that the PDF contains the radiologist, organisation, DICOM UID and imaging context.</li>
+            <li>Run Hospital, GP clinic and Radiology practice sequentially with the same files.</li>
+            <li>Compare Ready, Conditional and Not Ready decisions against exact FHIR paths.</li>
+            <li>Use Evidence to prove that only the organisation requirements changed.</li>
           </ol>
           <div className="reference-row">
             <a href="https://hl7.org/fhir/R4/bundle.html" target="_blank" rel="noreferrer">
               FHIR Bundle R4
             </a>
-            <a href="https://hl7.org/fhir/R4/observation.html" target="_blank" rel="noreferrer">
-              FHIR Observation R4
+            <a href="https://hl7.org/fhir/R4/diagnosticreport.html" target="_blank" rel="noreferrer">
+              FHIR DiagnosticReport R4
+            </a>
+            <a href="https://hl7.org/fhir/R4/imagingstudy.html" target="_blank" rel="noreferrer">
+              FHIR ImagingStudy R4
             </a>
             <a
               href="https://projectlifedashboard.hl7.org/specifications/hl7-cda-r2-implementation-guide-consolidated-cda-templates-for-clinical-notes-release-2-1/"
@@ -1948,7 +1946,7 @@ function App() {
     && hasCandidateFhir,
   );
   const setupChecks = [
-    { label: "Profile", ready: Boolean(selectedDeploymentProfile) },
+    { label: "Organisation", ready: Boolean(selectedDeploymentProfile) },
     { label: "CDA + PDF", ready: hasCdaSource && hasPdfSource },
     { label: "Reference", ready: hasReferenceFhir },
     { label: "Candidate", ready: hasCandidateFhir },
@@ -1979,7 +1977,7 @@ function App() {
     setSelectedProfileId(null);
     setReuseContext({
       evaluationId: selectedEvaluation.id,
-      profileName: previousProfile?.name ?? "the previous profile",
+      profileName: previousProfile?.name ?? "the previous organisation",
     });
     setView("create");
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
@@ -1989,7 +1987,7 @@ function App() {
     setIsLoadingDemo(true);
     setToast(null);
     try {
-      const sample = await loadDemoDataset("ready");
+      const sample = await loadDemoDataset();
       setCapabilityInputs({
         cda: sample.clinicalBundle.filter((file) => /\.(?:xml|cda|ccda)$/i.test(file.name)).slice(0, 1),
         pdf: sample.clinicalBundle.filter((file) => /\.pdf$/i.test(file.name)).slice(0, 1),
@@ -2037,7 +2035,7 @@ function App() {
             "prompt_injection_resistance",
           ],
           generationInstructions:
-            "Generate one FHIR R4 Bundle that maps every clinically supported field from the CDA. Treat the PDF as corroborating evidence. Preserve synthetic identifiers, values, units, dates, LOINC codes, SNOMED CT codes, and resource references. Return JSON only.",
+            "Generate one FHIR R4 Bundle from the CDA and companion radiology PDF. Use the CDA as structured context and enrich it with PDF-only findings, impression, reporting organisation, radiologist, accession number, DICOM Study UID, modality and body site when explicitly supported. Create Patient, DiagnosticReport, ImagingStudy, Organization and Practitioner resources where evidence exists. Preserve exact identifiers, dates and references; do not infer missing facts. Return JSON only.",
         },
       });
 
@@ -2061,7 +2059,7 @@ function App() {
     setToast(null);
 
     if (!selectedDeploymentProfile) {
-      setToast("Choose one organisation profile first.");
+      setToast("Choose one organisation's requirements first.");
       return;
     }
 
@@ -2164,7 +2162,7 @@ function App() {
             return (
               <option key={run.id} value={run.id}>
                 {run.id === demoEvaluation.id
-                  ? `Synthetic baseline · ${demoProfile.shortName}`
+                  ? `Synthetic radiology · ${demoProfile.shortName}`
                   : `${run.id}${profile ? ` · ${profile.shortName}` : ""}`}
               </option>
             );
@@ -2302,9 +2300,9 @@ function App() {
                 <div>
                   <span className="eyebrow">Evaluation builder</span>
                   <h1>Evaluate one FHIR output</h1>
-                  <p>Select the target organisation, then upload the complete CDA and PDF case.</p>
+                  <p>Select the organisation whose conversion capability is being assessed.</p>
                 </div>
-                <span className="scope-chip"><ShieldCheck aria-hidden="true" /> One profile per run</span>
+                <span className="scope-chip"><ShieldCheck aria-hidden="true" /> Same capability · one organisation</span>
               </div>
 
               {reuseContext ? (
@@ -2323,16 +2321,16 @@ function App() {
               <div className="card">
                 <div className="section-heading numbered-heading">
                   <span>01</span>
-                  <div><h2 className="card-title">Choose organisation profile</h2><small>Only this deployment contract will be applied to the run.</small></div>
+                  <div><h2 className="card-title">Choose organisation requirements</h2><small>The files stay constant; only this organisation's acceptance rules apply.</small></div>
                 </div>
-                <div className="profile-selector-grid" role="radiogroup" aria-label="Organisation profile">
+                <div className="profile-selector-grid" role="radiogroup" aria-label="Organisation requirements">
                   {deploymentProfiles.map((profile) => {
                     const active = selectedProfileId === profile.id;
-                    const ProfileIcon = profile.id === "hospital-network"
+                    const ProfileIcon = profile.id === "hospital"
                       ? Database
-                      : profile.id === "gp-shared-care"
-                        ? Link2
-                        : TestTube2;
+                      : profile.id === "gp-clinic"
+                        ? FileText
+                        : ScanLine;
                     const wasPrevious = reuseContext?.profileName === profile.name;
                     return (
                       <button
@@ -2360,7 +2358,7 @@ function App() {
                           ))}
                         </span>
                         <span className="profile-select-foot">
-                          <span>Profile v{profile.version}</span>
+                          <span>Requirements v{profile.version}</span>
                           <strong>{active ? "Selected" : wasPrevious ? "Previous run" : "Select"}</strong>
                         </span>
                       </button>
@@ -2428,8 +2426,8 @@ function App() {
                   </h2>
                   <p>
                     {selectedDeploymentProfile
-                      ? `${selectedDeploymentProfile.requirements.length} profile requirements will be applied automatically.`
-                      : "Choose a profile and add all required files."}
+                      ? `${selectedDeploymentProfile.requirements.length} organisation requirements will be applied automatically.`
+                      : "Choose an organisation and add all required files."}
                   </p>
                   <div className="setup-checks" aria-label={`${completedSetupChecks} of ${setupChecks.length} setup steps complete`}>
                     {setupChecks.map((item) => (
@@ -2488,7 +2486,7 @@ function App() {
                 </div>
                 <div className="run-registry-row fixture-row">
                   <button type="button" onClick={() => { setSelectedId(demoEvaluation.id); setView("results"); }}>
-                    <span className="run-primary"><FlaskConical aria-hidden="true" /><span><strong>Synthetic pathology baseline</strong><small>{demoProfile.name} · Profile v{demoProfile.version}</small></span></span>
+                    <span className="run-primary"><FlaskConical aria-hidden="true" /><span><strong>Synthetic radiology baseline</strong><small>{demoProfile.name} · Requirements v{demoProfile.version}</small></span></span>
                     <span>{formatDate(demoEvaluation.createdAt)}</span>
                     <strong>{score(demoEvaluation.readinessScore)}</strong>
                     <StatusPill value={demoEvaluation.decision} tone="warn" />
@@ -2735,7 +2733,7 @@ function App() {
                 <div>
                   <span className="eyebrow">
                     {selectedEvaluationProfile
-                      ? `${selectedEvaluationProfile.name} · Profile v${selectedEvaluationProfile.version}`
+                      ? `${selectedEvaluationProfile.name} · Requirements v${selectedEvaluationProfile.version}`
                       : selectedEvaluation.capability}
                   </span>
                   <h1>Readiness report</h1>
@@ -2764,7 +2762,7 @@ function App() {
                 <div className="result-decision-copy">
                   <div className="result-decision-label">
                     <span className="result-decision-icon"><SelectedDecisionIcon aria-hidden="true" /></span>
-                    <span>Profile decision</span>
+                    <span>Organisation decision</span>
                     <StatusPill
                       value={selectedEvaluation.decision}
                       tone={decisionTone[selectedEvaluation.decision]}
@@ -2779,7 +2777,7 @@ function App() {
                     {canReuseSelectedFiles ? (
                       <button className="decision-reuse-action" type="button" onClick={reuseSelectedFiles}>
                         <Link2 aria-hidden="true" />
-                        Evaluate same files for another profile
+                        Evaluate same files for another organisation
                       </button>
                     ) : null}
                   </div>
@@ -2799,7 +2797,7 @@ function App() {
                   <div><dt>Blocking requirements</dt><dd>{selectedEvaluation.profileAssessment?.blockingCount ?? summary.blockers}</dd></div>
                   <div><dt>Review requirements</dt><dd>{selectedEvaluation.profileAssessment?.reviewCount ?? summary.review}</dd></div>
                   <div>
-                    <dt>Profile gates met</dt>
+                    <dt>Requirements met</dt>
                     <dd>
                       {selectedEvaluation.profileAssessment
                         ? `${selectedEvaluation.profileAssessment.passCount}/${selectedEvaluation.profileAssessment.requirements.length}`
@@ -2817,7 +2815,7 @@ function App() {
                     <section className="result-section profile-result-section" aria-labelledby="profile-requirements-title">
                       <div className="result-section-head">
                         <div>
-                          <span className="eyebrow">Deployment contract</span>
+                          <span className="eyebrow">Organisation requirements</span>
                           <h2 id="profile-requirements-title">{selectedEvaluation.profileAssessment.profileName} requirements</h2>
                         </div>
                         <span className="profile-version-chip">v{selectedEvaluation.profileAssessment.version}</span>

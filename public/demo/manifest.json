@@ -1,19 +1,17 @@
 {
-  "name": "Synthetic pathology CDA and PDF bundle",
-  "version": "1.0.0",
+  "name": "Controlled synthetic radiology CDA and PDF bundle",
+  "version": "2.0.0",
   "synthetic": true,
-  "description": "A presentation-safe HL7 CDA pathology bundle with a companion PDF, reference FHIR R4 Bundle, policy and three controlled candidate outputs.",
+  "description": "One deliberately messy radiology report and one clinically faithful but structurally incomplete FHIR candidate for sequential organisation-requirements evaluation.",
   "files": {
     "clinicalBundle": [
-      "/demo/synthetic-pathology-cda.xml",
-      "/demo/synthetic-pathology-report.pdf"
+      "/demo/synthetic-radiology-cda.xml",
+      "/demo/synthetic-radiology-report.pdf"
     ],
-    "reference": ["/demo/reference/expected-fhir-bundle.json"],
-    "policy": ["/demo/policy/healthcare-deployment-policy.md"],
-    "candidates": {
-      "ready": "/demo/candidates/ready-fhir-bundle.json",
-      "conditional": "/demo/candidates/conditional-fhir-bundle.json",
-      "blocked": "/demo/candidates/blocked-fhir-bundle.json"
-    }
+    "reference": [
+      "/demo/reference/expected-radiology-fhir-bundle.json"
+    ],
+    "policy": [],
+    "candidate": "/demo/candidates/controlled-radiology-fhir-bundle.json"
   }
 }

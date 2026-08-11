@@ -1,0 +1,89 @@
+{
+  "resourceType": "Bundle",
+  "id": "synthetic-radiology-controlled-candidate",
+  "type": "collection",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:patient-syn-rad-001",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "patient-syn-rad-001",
+        "identifier": [
+          {
+            "system": "urn:synthetic:patient-id",
+            "value": "SYN-RAD-001"
+          }
+        ],
+        "name": [
+          {
+            "family": "Sample",
+            "given": ["Alex"]
+          }
+        ],
+        "birthDate": "1982-03-14"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:imaging-study-001",
+      "resource": {
+        "resourceType": "ImagingStudy",
+        "id": "imaging-study-001",
+        "status": "available",
+        "subject": {
+          "reference": "urn:uuid:patient-syn-rad-001"
+        },
+        "started": "2026-08-11T10:14:00+10:00"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:diagnostic-report-001",
+      "resource": {
+        "resourceType": "DiagnosticReport",
+        "id": "diagnostic-report-001",
+        "text": {
+          "status": "additional",
+          "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\"><p>Harbour Diagnostic Imaging</p><p>Chest X-ray PA and lateral. No focal air-space opacity or pleural effusion. No acute cardiopulmonary abnormality.</p><p>Electronically signed Maya Chen MBBS FRANZCR. Accession HR-26-00184. Study UID 1.2.826.0.1.3680043.10.1000.14. Modality DX; body site chest.</p></div>"
+        },
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/v2-0074",
+                "code": "RAD",
+                "display": "Radiology"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "36643-5",
+              "display": "XR Chest 2 Views"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "urn:uuid:patient-syn-rad-001"
+        },
+        "effectiveDateTime": "2026-08-11T10:14:00+10:00",
+        "issued": "2026-08-11T10:42:00+10:00",
+        "imagingStudy": [
+          {
+            "reference": "urn:uuid:imaging-study-001"
+          }
+        ],
+        "conclusion": "No acute cardiopulmonary abnormality.",
+        "presentedForm": [
+          {
+            "contentType": "application/pdf",
+            "url": "/demo/synthetic-radiology-report.pdf",
+            "title": "Synthetic chest X-ray report"
+          }
+        ]
+      }
+    }
+  ]
+}

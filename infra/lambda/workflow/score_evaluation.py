@@ -59,6 +59,7 @@ SUPPORTED_FHIR_RESOURCE_TYPES = {
     "Condition",
     "DiagnosticReport",
     "Encounter",
+    "ImagingStudy",
     "MedicationRequest",
     "Observation",
     "Organization",
@@ -68,99 +69,134 @@ SUPPORTED_FHIR_RESOURCE_TYPES = {
 }
 
 DEPLOYMENT_PROFILES = {
-    "hospital-network": {
-        "name": "Hospital network",
-        "version": "1.0",
-        "purpose": "Internal clinical record ingestion",
+    "hospital": {
+        "name": "Hospital",
+        "version": "2.0",
+        "purpose": "Own CDA/PDF-to-FHIR conversion",
         "requirements": [
             {
-                "id": "core-resources",
-                "label": "Core clinical resources",
+                "id": "clinical-report-core",
+                "label": "Core report resources",
                 "severity": "block",
             },
             {
                 "id": "resolved-references",
-                "label": "Resolved bundle references",
+                "label": "Resolved references",
                 "severity": "block",
             },
             {
-                "id": "final-statuses",
-                "label": "Final clinical status",
-                "severity": "review",
-            },
-            {
-                "id": "complete-ucum",
-                "label": "Complete UCUM coding",
-                "severity": "advisory",
-            },
-        ],
-    },
-    "gp-shared-care": {
-        "name": "GP shared care",
-        "version": "1.0",
-        "purpose": "Inter-provider clinical handover",
-        "requirements": [
-            {
-                "id": "core-resources",
-                "label": "Core clinical resources",
-                "severity": "block",
-            },
-            {
-                "id": "resolved-references",
-                "label": "Resolved bundle references",
+                "id": "final-report-status",
+                "label": "Final report status",
                 "severity": "block",
             },
             {
                 "id": "report-interpretation",
-                "label": "Report interpretation",
-                "severity": "review",
+                "label": "Readable impression",
+                "severity": "block",
             },
             {
-                "id": "care-provenance",
-                "label": "Care-provider provenance",
-                "severity": "review",
+                "id": "structured-report-source",
+                "label": "Structured report source",
+                "severity": "advisory",
             },
             {
-                "id": "complete-ucum",
-                "label": "Complete UCUM coding",
+                "id": "imaging-identifiers",
+                "label": "Structured imaging identifiers",
                 "severity": "advisory",
             },
         ],
     },
-    "pathology-analytics": {
-        "name": "Pathology analytics",
-        "version": "1.0",
-        "purpose": "Structured querying and population analytics",
+    "gp-clinic": {
+        "name": "GP clinic",
+        "version": "2.0",
+        "purpose": "Own CDA/PDF-to-FHIR conversion",
         "requirements": [
             {
-                "id": "core-resources",
-                "label": "Core clinical resources",
+                "id": "clinical-report-core",
+                "label": "Core report resources",
+                "severity": "block",
+            },
+            {
+                "id": "report-interpretation",
+                "label": "Readable impression",
+                "severity": "block",
+            },
+            {
+                "id": "structured-report-source",
+                "label": "Structured report source",
+                "severity": "review",
+            },
+            {
+                "id": "resolved-references",
+                "label": "Resolved references",
+                "severity": "block",
+            },
+            {
+                "id": "final-report-status",
+                "label": "Final report status",
+                "severity": "block",
+            },
+            {
+                "id": "source-report-access",
+                "label": "Original report access",
+                "severity": "review",
+            },
+            {
+                "id": "imaging-identifiers",
+                "label": "Structured imaging identifiers",
+                "severity": "advisory",
+            },
+        ],
+    },
+    "radiology-practice": {
+        "name": "Radiology practice",
+        "version": "2.0",
+        "purpose": "Own CDA/PDF-to-FHIR conversion",
+        "requirements": [
+            {
+                "id": "radiology-core-resources",
+                "label": "Radiology resources",
+                "severity": "block",
+            },
+            {
+                "id": "imaging-study-link",
+                "label": "Linked imaging study",
+                "severity": "block",
+            },
+            {
+                "id": "imaging-identifiers",
+                "label": "DICOM and accession IDs",
+                "severity": "block",
+            },
+            {
+                "id": "imaging-context",
+                "label": "Modality and body site",
+                "severity": "block",
+            },
+            {
+                "id": "structured-report-source",
+                "label": "Structured report source",
+                "severity": "block",
+            },
+            {
+                "id": "report-interpretation",
+                "label": "Readable impression",
                 "severity": "block",
             },
             {
                 "id": "resolved-references",
-                "label": "Resolved bundle references",
+                "label": "Resolved references",
                 "severity": "block",
             },
             {
-                "id": "loinc-observations",
-                "label": "LOINC-coded observations",
+                "id": "final-report-status",
+                "label": "Final report status",
                 "severity": "block",
             },
             {
-                "id": "complete-ucum",
-                "label": "Complete UCUM coding",
-                "severity": "block",
-            },
-            {
-                "id": "effective-dates",
-                "label": "Effective dates",
-                "severity": "block",
-            },
-            {
-                "id": "final-statuses",
-                "label": "Final clinical status",
-                "severity": "block",
+                "id": "source-report-access",
+                "label": "Original report access",
+                "severity": "review",
             },
         ],
     },
@@ -953,6 +989,12 @@ def validate_fhir_candidate(candidate_text):
                     errors.append(
                         f"DiagnosticReport {resource_id or index} is missing {field}."
                     )
+        elif resource_type == "ImagingStudy":
+            for field in ("status", "subject"):
+                if not resource.get(field):
+                    errors.append(
+                        f"ImagingStudy {resource_id or index} is missing {field}."
+                    )
         elif resource_type == "Condition":
             for field in ("code", "subject"):
                 if not resource.get(field):
@@ -1019,36 +1061,25 @@ def resource_display(resource, index):
     return f"{resource_type}/{resource_id}"
 
 
-def has_loinc_coding(resource):
-    code = resource.get("code")
-    if not isinstance(code, dict):
-        return False
-
-    return any(
-        isinstance(coding, dict)
-        and "loinc.org" in str(coding.get("system", "")).lower()
-        and bool(str(coding.get("code", "")).strip())
-        for coding in code.get("coding", [])
-    )
-
-
 def assess_profile_requirement(requirement_id, payload, resources, validation):
     resource_types = {
         str(resource.get("resourceType"))
         for resource in resources
         if resource.get("resourceType")
     }
-    observations = [
-        resource for resource in resources if resource.get("resourceType") == "Observation"
-    ]
     diagnostic_reports = [
         resource
         for resource in resources
         if resource.get("resourceType") == "DiagnosticReport"
     ]
+    imaging_studies = [
+        resource
+        for resource in resources
+        if resource.get("resourceType") == "ImagingStudy"
+    ]
 
-    if requirement_id == "core-resources":
-        required = {"Patient", "Observation", "DiagnosticReport"}
+    if requirement_id == "clinical-report-core":
+        required = {"Patient", "DiagnosticReport"}
         missing = sorted(required - resource_types)
         if missing:
             return (
@@ -1058,7 +1089,22 @@ def assess_profile_requirement(requirement_id, payload, resources, validation):
             )
         return (
             True,
-            "Patient, Observation and DiagnosticReport resources are present.",
+            "Patient and DiagnosticReport resources are present.",
+            "Bundle.entry.resource.resourceType",
+        )
+
+    if requirement_id == "radiology-core-resources":
+        required = {"Patient", "DiagnosticReport", "ImagingStudy"}
+        missing = sorted(required - resource_types)
+        if missing:
+            return (
+                False,
+                "Missing required radiology resources: " + ", ".join(missing) + ".",
+                "Bundle.entry.resource.resourceType",
+            )
+        return (
+            True,
+            "Patient, DiagnosticReport and ImagingStudy resources are present.",
             "Bundle.entry.resource.resourceType",
         )
 
@@ -1082,47 +1128,29 @@ def assess_profile_requirement(requirement_id, payload, resources, validation):
             "Bundle.entry.resource.reference",
         )
 
-    if requirement_id == "final-statuses":
+    if requirement_id == "final-report-status":
         final_statuses = {"final", "amended", "corrected", "appended"}
-        targets = observations + diagnostic_reports
         invalid = [
             f"{resource_display(resource, index)}={resource.get('status') or 'missing'}"
-            for index, resource in enumerate(targets, start=1)
+            for index, resource in enumerate(diagnostic_reports, start=1)
             if str(resource.get("status", "")).lower() not in final_statuses
         ]
+        if not diagnostic_reports:
+            return (
+                False,
+                "No DiagnosticReport is available for final-status validation.",
+                "DiagnosticReport.status",
+            )
         if invalid:
             return (
                 False,
-                "Non-final clinical statuses: " + ", ".join(invalid[:3]) + ".",
-                "Observation.status / DiagnosticReport.status",
+                "Non-final report status: " + ", ".join(invalid[:3]) + ".",
+                "DiagnosticReport.status",
             )
         return (
             True,
-            "Observations and DiagnosticReport use final clinical statuses.",
-            "Observation.status / DiagnosticReport.status",
-        )
-
-    if requirement_id == "complete-ucum":
-        missing = []
-        for index, observation in enumerate(observations, start=1):
-            quantity = observation.get("valueQuantity")
-            if not isinstance(quantity, dict):
-                continue
-            if (
-                quantity.get("system") != "http://unitsofmeasure.org"
-                or not str(quantity.get("code", "")).strip()
-            ):
-                missing.append(resource_display(observation, index))
-        if missing:
-            return (
-                False,
-                "Incomplete UCUM system or code: " + ", ".join(missing[:3]) + ".",
-                "Observation.valueQuantity.system / code",
-            )
-        return (
-            True,
-            "Every quantitative Observation declares a UCUM system and code.",
-            "Observation.valueQuantity.system / code",
+            "DiagnosticReport uses a final clinical status.",
+            "DiagnosticReport.status",
         )
 
     if requirement_id == "report-interpretation":
@@ -1144,59 +1172,132 @@ def assess_profile_requirement(requirement_id, payload, resources, validation):
             "DiagnosticReport.conclusion / presentedForm / text",
         )
 
-    if requirement_id == "care-provenance":
-        has_actor_resource = bool({"Practitioner", "Organization"} & resource_types)
+    if requirement_id == "structured-report-source":
         has_report_actor = any(
             bool(report.get("performer")) or bool(report.get("resultsInterpreter"))
             for report in diagnostic_reports
         )
-        if not (has_actor_resource or has_report_actor):
+        if not has_report_actor:
             return (
                 False,
-                "No Practitioner, Organization or DiagnosticReport performer identifies the report source.",
-                "Practitioner / Organization / DiagnosticReport.performer",
+                "DiagnosticReport does not structure the report source as a performer or results interpreter.",
+                "DiagnosticReport.performer / resultsInterpreter",
             )
         return (
             True,
-            "The report source is represented through a care-provider resource or reference.",
-            "Practitioner / Organization / DiagnosticReport.performer",
+            "DiagnosticReport identifies report responsibility through performer or resultsInterpreter.",
+            "DiagnosticReport.performer / resultsInterpreter",
         )
 
-    if requirement_id == "loinc-observations":
-        missing = [
-            resource_display(observation, index)
-            for index, observation in enumerate(observations, start=1)
-            if not has_loinc_coding(observation)
+    if requirement_id == "source-report-access":
+        has_attachment = any(
+            any(
+                isinstance(attachment, dict)
+                and any(attachment.get(field) for field in ("data", "url", "title"))
+                for attachment in report.get("presentedForm", [])
+            )
+            for report in diagnostic_reports
+        )
+        if not has_attachment:
+            return (
+                False,
+                "DiagnosticReport does not retain an accessible issued report attachment.",
+                "DiagnosticReport.presentedForm",
+            )
+        return (
+            True,
+            "DiagnosticReport retains the issued report through presentedForm.",
+            "DiagnosticReport.presentedForm",
+        )
+
+    if requirement_id == "imaging-study-link":
+        has_link = bool(imaging_studies) and any(
+            bool(report.get("imagingStudy")) for report in diagnostic_reports
+        )
+        if not has_link:
+            return (
+                False,
+                "DiagnosticReport does not reference the corresponding ImagingStudy.",
+                "DiagnosticReport.imagingStudy",
+            )
+        return (
+            True,
+            "DiagnosticReport references an ImagingStudy in the candidate Bundle.",
+            "DiagnosticReport.imagingStudy",
+        )
+
+    if requirement_id == "imaging-identifiers":
+        identifiers = [
+            identifier
+            for study in imaging_studies
+            for identifier in study.get("identifier", [])
+            if isinstance(identifier, dict)
         ]
+        has_dicom_uid = any(
+            identifier.get("system") == "urn:dicom:uid"
+            and bool(str(identifier.get("value", "")).strip())
+            for identifier in identifiers
+        )
+        has_accession = any(
+            any(
+                isinstance(coding, dict) and coding.get("code") == "ACSN"
+                for coding in (
+                    identifier.get("type", {}).get("coding", [])
+                    if isinstance(identifier.get("type"), dict)
+                    else []
+                )
+            )
+            and bool(str(identifier.get("value", "")).strip())
+            for identifier in identifiers
+        )
+        missing = []
+        if not has_dicom_uid:
+            missing.append("DICOM Study UID")
+        if not has_accession:
+            missing.append("accession number")
         if missing:
             return (
                 False,
-                "Missing LOINC coding: " + ", ".join(missing[:3]) + ".",
-                "Observation.code.coding",
+                "ImagingStudy is missing structured " + " and ".join(missing) + ".",
+                "ImagingStudy.identifier",
             )
         return (
             True,
-            "Every Observation contains a LOINC system and code.",
-            "Observation.code.coding",
+            "ImagingStudy retains both DICOM Study UID and accession identifiers.",
+            "ImagingStudy.identifier",
         )
 
-    if requirement_id == "effective-dates":
-        date_fields = {"effectiveDateTime", "effectivePeriod", "effectiveTiming", "issued"}
-        missing = [
-            resource_display(observation, index)
-            for index, observation in enumerate(observations, start=1)
-            if not any(observation.get(field) for field in date_fields)
-        ]
+    if requirement_id == "imaging-context":
+        has_modality = any(
+            bool(study.get("modality"))
+            or any(
+                isinstance(series, dict) and bool(series.get("modality"))
+                for series in study.get("series", [])
+            )
+            for study in imaging_studies
+        )
+        has_body_site = any(
+            any(
+                isinstance(series, dict) and bool(series.get("bodySite"))
+                for series in study.get("series", [])
+            )
+            for study in imaging_studies
+        )
+        missing = []
+        if not has_modality:
+            missing.append("modality")
+        if not has_body_site:
+            missing.append("body site")
         if missing:
             return (
                 False,
-                "Missing structured effective date: " + ", ".join(missing[:3]) + ".",
-                "Observation.effective[x]",
+                "ImagingStudy is missing structured " + " and ".join(missing) + ".",
+                "ImagingStudy.modality / series.bodySite",
             )
         return (
             True,
-            "Every Observation contains a structured effective date.",
-            "Observation.effective[x]",
+            "ImagingStudy retains structured modality and body-site metadata.",
+            "ImagingStudy.modality / series.bodySite",
         )
 
     return False, "This profile requirement is not implemented.", requirement_id
