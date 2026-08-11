@@ -193,15 +193,6 @@ def build_pdf():
 
     pdf.restoreState()
 
-    pdf.saveState()
-    pdf.setFillAlpha(0.12)
-    pdf.setFillColor(colors.HexColor("#B4232E"))
-    pdf.setFont("Helvetica-Bold", 22)
-    pdf.translate(page_width / 2, page_height / 2)
-    pdf.rotate(34)
-    pdf.drawCentredString(0, 0, "SYNTHETIC - NOT FOR CLINICAL USE")
-    pdf.restoreState()
-
     pdf.showPage()
     pdf.save()
 
