@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 import {
   Activity,
   AlertTriangle,
   ArrowRight,
   BookOpen,
   Boxes,
+  Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   CircleCheck,
   Cpu,
@@ -171,11 +173,28 @@ type CapabilityInputState = {
   pdf: File[];
 };
 
+type ModelOption = {
+  value: string;
+  label: string;
+  detail: string;
+};
+
 const defaultEvaluationRules: RuleId[] = [
   "hl7_cda_mapping",
   "fhir_schema_conformance",
   "clinical_code_grounding",
   "prompt_injection_resistance",
+];
+
+const generationModelOptions: ModelOption[] = [
+  { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", detail: "Default" },
+  { value: "gpt-5.4", label: "GPT-5.4", detail: "Higher capability" },
+];
+
+const evaluationModelOptions: ModelOption[] = [
+  ...generationModelOptions,
+  { value: "gpt-4o", label: "GPT-4o", detail: "Legacy" },
+  { value: "gpt-4o-mini", label: "GPT-4o Mini", detail: "Legacy efficient" },
 ];
 
 const demoPathologyResults = [
@@ -1686,6 +1705,130 @@ const FileField = ({
   </label>
 );
 
+const ModelSelect = ({
+  value,
+  options,
+  onChange,
+  showLabel = false,
+  className = "",
+}: {
+  value: string;
+  options: ModelOption[];
+  onChange: (value: string) => void;
+  showLabel?: boolean;
+  className?: string;
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const listboxId = useId();
+  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  const selectedOption = options[selectedIndex] ?? options[0];
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setIsOpen(false);
+    };
+    document.addEventListener("pointerdown", handleOutsidePointer);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointer);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    optionRefs.current[activeIndex]?.focus();
+  }, [activeIndex, isOpen]);
+
+  const openMenu = (index = selectedIndex) => {
+    setActiveIndex(index);
+    setIsOpen(true);
+  };
+
+  const selectOption = (option: ModelOption) => {
+    onChange(option.value);
+    setIsOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  const moveActiveOption = (offset: number) => {
+    setActiveIndex((current) => (current + offset + options.length) % options.length);
+  };
+
+  return (
+    <div className={`model-select ${isOpen ? "open" : ""} ${className}`.trim()} ref={rootRef}>
+      <button
+        aria-controls={listboxId}
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        className="model-select-trigger"
+        onClick={() => (isOpen ? setIsOpen(false) : openMenu())}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            openMenu(selectedIndex);
+          }
+        }}
+        ref={triggerRef}
+        type="button"
+      >
+        {showLabel ? <span className="model-select-label">Model</span> : null}
+        <strong>{selectedOption.label}</strong>
+        <ChevronDown aria-hidden="true" />
+      </button>
+      {isOpen ? (
+        <div
+          aria-label="Model"
+          className="model-select-menu"
+          id={listboxId}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              moveActiveOption(1);
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              moveActiveOption(-1);
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              setActiveIndex(0);
+            } else if (event.key === "End") {
+              event.preventDefault();
+              setActiveIndex(options.length - 1);
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              setIsOpen(false);
+              triggerRef.current?.focus();
+            } else if (event.key === "Tab") {
+              setIsOpen(false);
+            }
+          }}
+          role="listbox"
+        >
+          {options.map((option, index) => (
+            <button
+              aria-selected={option.value === value}
+              className={`model-select-option ${option.value === value ? "selected" : ""}`}
+              key={option.value}
+              onClick={() => selectOption(option)}
+              onMouseEnter={() => setActiveIndex(index)}
+              ref={(node) => {
+                optionRefs.current[index] = node;
+              }}
+              role="option"
+              type="button"
+            >
+              <span><strong>{option.label}</strong><small>{option.detail}</small></span>
+              {option.value === value ? <Check aria-hidden="true" /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 const escapePattern = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const HighlightedLine = ({ text, terms }: { text: string; terms: string[] }) => {
@@ -2075,7 +2218,13 @@ const CapabilityOverviewPage = ({
           <button className="sample-button" type="button" disabled={isLoadingSample} onClick={onLoadSample}>
             <FlaskConical aria-hidden="true" /> {isLoadingSample ? "Loading…" : "Load sample"}
           </button>
-          <label className="model-picker"><span>Model</span><select value={modelId} onChange={(event) => onModelChange(event.target.value)}><option value="gpt-5.4-mini">GPT-5.4 Mini</option><option value="gpt-5.4">GPT-5.4</option></select></label>
+          <ModelSelect
+            className="capability-model-select"
+            onChange={onModelChange}
+            options={generationModelOptions}
+            showLabel
+            value={modelId}
+          />
           <button className="primary-action" type="button" disabled={!sourceReady || isStarting || isRunning} onClick={onGenerate}>
             <Play aria-hidden="true" />{isStarting ? "Uploading…" : isRunning ? "Generating…" : candidateText ? "Generate again" : "Generate FHIR"}
           </button>
@@ -3032,15 +3181,15 @@ function App() {
                     <ChevronRight aria-hidden="true" />
                   </summary>
                   <div className="settings-fields">
-                    <label>
+                    <div className="settings-model-field">
                       <span>Model</span>
-                      <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
-                        <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
-                        <option value="gpt-5.4">GPT-5.4</option>
-                        <option value="gpt-4o">GPT-4o</option>
-                        <option value="gpt-4o-mini">GPT-4o Mini</option>
-                      </select>
-                    </label>
+                      <ModelSelect
+                        className="settings-model-select"
+                        onChange={setModelId}
+                        options={evaluationModelOptions}
+                        value={modelId}
+                      />
+                    </div>
                     <label>
                       <span>Scoring note</span>
                       <input value={notes} onChange={(event) => setNotes(event.target.value)} />
