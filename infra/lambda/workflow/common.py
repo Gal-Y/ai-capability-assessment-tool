@@ -56,13 +56,29 @@ def read_uploaded_file(file_ref):
     }
 
 
+def get_openai_file_content_type(name, content_type):
+    normalized_name = str(name or "").lower()
+    normalized_type = str(content_type or "").split(";", 1)[0].strip().lower()
+
+    if normalized_name.endswith((".xml", ".cda", ".ccda")) or (
+        normalized_type in {"application/xml", "application/hl7-v3+xml"}
+        or normalized_type.endswith("+xml")
+    ):
+        return "text/xml"
+
+    return normalized_type or "application/octet-stream"
+
+
 def to_input_file_item(file_ref):
     uploaded = read_uploaded_file(file_ref)
     encoded = base64.b64encode(uploaded["bytes"]).decode("ascii")
+    content_type = get_openai_file_content_type(
+        uploaded["name"], uploaded["contentType"]
+    )
     return {
         "type": "input_file",
         "filename": uploaded["name"],
-        "file_data": f"data:{uploaded['contentType']};base64,{encoded}",
+        "file_data": f"data:{content_type};base64,{encoded}",
     }
 
 
