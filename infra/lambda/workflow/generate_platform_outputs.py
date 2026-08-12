@@ -1,5 +1,11 @@
+import json
+
 from common import now_iso, to_input_file_item, update_evaluation_item, write_artifact
-from openai_client import create_response, extract_output_text
+from openai_client import (
+    create_response,
+    get_incomplete_reason,
+    parse_json_output,
+)
 
 
 GENERATION_INSTRUCTIONS = (
@@ -7,6 +13,9 @@ GENERATION_INSTRUCTIONS = (
     "Markdown fence, commentary, or text before or after it. Preserve clinically material "
     "facts from the source and do not invent unsupported resources, values, units, or codes."
 )
+
+GENERATION_RESPONSE_FORMAT = {"type": "json_object"}
+GENERATION_MAX_OUTPUT_TOKENS = (3600, 6000)
 
 EVALUATION_RULE_PROMPTS = {
     "hl7_cda_mapping": (
@@ -130,6 +139,90 @@ def build_generation_content(test_case, evaluation_rules, generation_instruction
     return content
 
 
+def validate_generated_bundle(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("the model response was not a JSON object")
+
+    if payload.get("resourceType") != "Bundle":
+        raise ValueError("the model response was not a FHIR Bundle")
+
+    entries = payload.get("entry")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("the FHIR Bundle did not contain any resources")
+
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Bundle.entry[{index}] was not an object")
+        resource = entry.get("resource")
+        if not isinstance(resource, dict) or not resource.get("resourceType"):
+            raise ValueError(
+                f"Bundle.entry[{index}] did not contain a FHIR resource"
+            )
+
+    return payload
+
+
+def merge_usage(total_usage, usage):
+    total_usage["inputTokens"] += int(usage.get("input_tokens", 0))
+    total_usage["outputTokens"] += int(usage.get("output_tokens", 0))
+    total_usage["totalTokens"] += int(usage.get("total_tokens", 0))
+
+
+def generate_fhir_bundle_with_retry(
+    *,
+    event,
+    test_case,
+    model_id,
+    input_content,
+):
+    total_latency_seconds = 0.0
+    total_usage = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
+    last_error = None
+
+    for attempt, max_output_tokens in enumerate(
+        GENERATION_MAX_OUTPUT_TOKENS, start=1
+    ):
+        response_payload, latency_seconds = create_response(
+            model=model_id,
+            instructions=GENERATION_INSTRUCTIONS,
+            input_content=input_content,
+            response_format=GENERATION_RESPONSE_FORMAT,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort="low",
+            verbosity="low",
+            metadata={
+                "evaluation_id": event["evaluationId"],
+                "case_id": test_case["caseId"],
+                "phase": "generation",
+                "attempt": str(attempt),
+            },
+        )
+        total_latency_seconds += latency_seconds
+        merge_usage(total_usage, response_payload.get("usage", {}))
+
+        try:
+            incomplete_reason = get_incomplete_reason(response_payload)
+            if incomplete_reason:
+                raise RuntimeError(
+                    f"OpenAI generation was incomplete: {incomplete_reason}"
+                )
+            bundle = validate_generated_bundle(parse_json_output(response_payload))
+            return (
+                json.dumps(bundle, ensure_ascii=False, separators=(",", ":")),
+                total_latency_seconds,
+                total_usage,
+                attempt,
+            )
+        except (RuntimeError, ValueError) as error:
+            last_error = error
+
+    raise RuntimeError(
+        "FHIR generation failed: the model did not return a valid FHIR Bundle "
+        f"after {len(GENERATION_MAX_OUTPUT_TOKENS)} attempts. Generate again. "
+        f"Last error: {last_error}"
+    )
+
+
 def handler(event, _context):
     update_evaluation_item(
         event["evaluationId"],
@@ -154,28 +247,21 @@ def handler(event, _context):
     total_tokens = 0
 
     for test_case in event.get("testCases", []):
-        response_payload, latency_seconds = create_response(
-            model=model_id,
-            instructions=GENERATION_INSTRUCTIONS,
-            input_content=build_generation_content(
-                test_case, evaluation_rules, generation_instructions
-            ),
-            max_output_tokens=2600,
-            reasoning_effort="low",
-            verbosity="low",
-            metadata={
-                "evaluation_id": event["evaluationId"],
-                "case_id": test_case["caseId"],
-                "phase": "generation",
-            },
+        summary_text, latency_seconds, usage, attempt_count = (
+            generate_fhir_bundle_with_retry(
+                event=event,
+                test_case=test_case,
+                model_id=model_id,
+                input_content=build_generation_content(
+                    test_case, evaluation_rules, generation_instructions
+                ),
+            )
         )
-        summary_text = extract_output_text(response_payload).strip()
-        usage = response_payload.get("usage", {})
 
         total_generation_latency += latency_seconds
-        total_input_tokens += int(usage.get("input_tokens", 0))
-        total_output_tokens += int(usage.get("output_tokens", 0))
-        total_tokens += int(usage.get("total_tokens", 0))
+        total_input_tokens += usage["inputTokens"]
+        total_output_tokens += usage["outputTokens"]
+        total_tokens += usage["totalTokens"]
 
         outputs.append(
             {
@@ -184,11 +270,8 @@ def handler(event, _context):
                 "modelId": model_id,
                 "summaryText": summary_text,
                 "latencySeconds": round(latency_seconds, 3),
-                "usage": {
-                    "inputTokens": int(usage.get("input_tokens", 0)),
-                    "outputTokens": int(usage.get("output_tokens", 0)),
-                    "totalTokens": int(usage.get("total_tokens", 0)),
-                },
+                "usage": usage,
+                "attemptCount": attempt_count,
                 "status": "generated",
             }
         )

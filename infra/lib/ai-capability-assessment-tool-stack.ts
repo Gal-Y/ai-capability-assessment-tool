@@ -192,7 +192,7 @@ export class AiCapabilityAssessmentToolStack extends Stack {
         UPLOADS_BUCKET: uploadsBucket.bucketName,
         ARTIFACTS_BUCKET: artifactsBucket.bucketName,
       },
-      Duration.minutes(3),
+      Duration.minutes(5),
     );
 
     const loadUploadedOutputsFn = createPythonFunction(

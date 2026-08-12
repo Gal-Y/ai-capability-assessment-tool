@@ -4490,6 +4490,15 @@ button.table-row:hover {
   color: var(--good);
 }
 
+.capability-status.status-failed {
+  border-color: color-mix(in srgb, var(--bad) 32%, var(--line));
+  background: color-mix(in srgb, var(--bad) 6%, var(--surface));
+}
+
+.capability-status.status-failed > svg {
+  color: var(--bad-text);
+}
+
 .capability-status strong {
   font-size: 13px;
   font-weight: 650;
@@ -5017,6 +5026,11 @@ button.table-row:hover {
 .document-empty span {
   max-width: 300px;
   font-size: 13px;
+}
+
+.document-empty.generation-error svg,
+.document-empty.generation-error strong {
+  color: var(--bad-text);
 }
 
 @media (max-width: 980px) {

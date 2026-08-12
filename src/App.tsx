@@ -2151,6 +2151,17 @@ const CapabilityOverviewPage = ({
   const selectedResourceLinked = resourceMappings.length > 0;
   const isRunning = evaluation?.status === "RUNNING";
   const isComplete = evaluation?.status === "COMPLETED";
+  const hasValidCandidate = Boolean(
+    candidateText && !parsedCandidate.error && parsedCandidate.resources.length > 0,
+  );
+  const generationSucceeded = Boolean(isComplete && hasValidCandidate);
+  const generationFailed = Boolean(
+    evaluation && !isRunning && !generationSucceeded,
+  );
+  const generationError =
+    evaluation?.raw?.error ??
+    parsedCandidate.error ??
+    "No valid FHIR Bundle was produced. Generate again.";
   const sourceReady = Boolean(cdaFile && pdfFile && cdaOverview && pdfOverview && !cdaError && !pdfError);
 
   const hoverMapping = (mapping: CapabilityMapping | null) => {
@@ -2192,7 +2203,7 @@ const CapabilityOverviewPage = ({
           <h1>Pathology CDA/PDF to FHIR</h1>
           <p>Generate a candidate Bundle, then trace each FHIR resource back to its source evidence.</p>
         </div>
-        {isComplete && candidateText ? (
+        {generationSucceeded ? (
           <button className="quiet-action" type="button" onClick={onOpenResults}>
             <ShieldCheck aria-hidden="true" /> Readiness report
           </button>
@@ -2226,16 +2237,16 @@ const CapabilityOverviewPage = ({
             value={modelId}
           />
           <button className="primary-action" type="button" disabled={!sourceReady || isStarting || isRunning} onClick={onGenerate}>
-            <Play aria-hidden="true" />{isStarting ? "Uploading…" : isRunning ? "Generating…" : candidateText ? "Generate again" : "Generate FHIR"}
+            <Play aria-hidden="true" />{isStarting ? "Uploading…" : isRunning ? "Generating…" : evaluation ? "Generate again" : "Generate FHIR"}
           </button>
         </div>
       </section>
 
       {evaluation ? (
-        <div className={`capability-status status-${evaluation.status.toLowerCase()}`}>
-          {isComplete ? <CheckCircle2 aria-hidden="true" /> : isRunning ? <Activity aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
-          <strong>{isComplete ? "FHIR generated" : isRunning ? "Generating FHIR" : evaluation.status}</strong>
-          <span>{isRunning ? evaluation.stage.replace(/_/g, " ") : isComplete ? `${parsedCandidate.resources.length} resources · ${evaluation.processingSeconds?.toFixed(1) ?? "-"}s` : evaluation.raw?.error ?? "Generation did not complete."}</span>
+        <div className={`capability-status ${generationFailed ? "status-failed" : `status-${evaluation.status.toLowerCase()}`}`}>
+          {generationSucceeded ? <CheckCircle2 aria-hidden="true" /> : isRunning ? <Activity aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
+          <strong>{generationSucceeded ? "FHIR generated" : isRunning ? "Generating FHIR" : "FHIR generation failed"}</strong>
+          <span>{isRunning ? evaluation.stage.replace(/_/g, " ") : generationSucceeded ? `${parsedCandidate.resources.length} resources · ${evaluation.processingSeconds?.toFixed(1) ?? "-"}s` : generationError}</span>
           {isRunning ? <i aria-hidden="true" /> : null}
         </div>
       ) : null}
@@ -2273,8 +2284,8 @@ const CapabilityOverviewPage = ({
             <div><span className="eyebrow">Generated output</span><h2>FHIR Bundle</h2></div>
             {parsedCandidate.resources.length > 0 ? <div className="resource-header-meta"><span className="resource-detail">{parsedCandidate.resources.length} resources</span><span className={selectedResourceLinked ? "resource-link-state linked" : "resource-link-state unlinked"}>{selectedResourceLinked ? <Link2 aria-hidden="true" /> : <Unlink2 aria-hidden="true" />}{selectedResource ? `${resourceMappings.length} traced` : "Trace inactive"}</span></div> : null}
           </header>
-          {candidateText && parsedCandidate.error ? (
-            <div className="document-empty"><AlertTriangle aria-hidden="true" /><strong>Generated output needs review</strong><span>{parsedCandidate.error}</span></div>
+          {generationFailed ? (
+            <div className="document-empty generation-error"><AlertTriangle aria-hidden="true" /><strong>No valid FHIR Bundle was generated</strong><span>{generationError}</span></div>
           ) : candidateText && !parsedCandidate.error ? (
             <>
               <div className={`fhir-trace-status ${activeMapping ? "field-active" : ""}`}>
