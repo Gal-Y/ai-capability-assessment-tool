@@ -1,9 +1,7 @@
-import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-
 export type ClinicalSourceFact = {
   id: string;
   source: "CDA" | "PDF";
-  kind: "patient" | "practitioner" | "organization" | "observation" | "condition" | "report" | "imaging";
+  kind: "patient" | "practitioner" | "organization" | "specimen" | "observation" | "condition" | "report" | "imaging";
   label: string;
   value: string;
   code?: string;
@@ -69,6 +67,12 @@ export type CapabilityMapping = {
   matchTerms: string[];
 };
 
+type PdfEvidenceMatch = {
+  pageNumber: number;
+  text: string;
+  matchTerms: string[];
+};
+
 export type ParsedFhirCandidate = {
   bundle: Record<string, unknown> | null;
   formatted: string;
@@ -98,6 +102,17 @@ const formatLongDate = (value: string) => {
   return new Intl.DateTimeFormat("en-AU", {
     day: "numeric",
     month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+};
+
+const formatShortDate = (value: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(`${value}T00:00:00Z`);
+  return new Intl.DateTimeFormat("en-AU", {
+    day: "numeric",
+    month: "short",
     year: "numeric",
     timeZone: "UTC",
   }).format(date);
@@ -200,12 +215,17 @@ export const parseCdaDocument = async (file: File): Promise<CdaOverview> => {
   const custodianOrganization = custodian
     ? firstElement(custodian, "representedCustodianOrganization")
     : null;
-  const organizationId = custodianOrganization
-    ? directChild(custodianOrganization, "id")?.getAttribute("extension")
+  const representedOrganization = firstElement(root, "representedOrganization");
+  const sourceOrganization = custodianOrganization ?? representedOrganization;
+  const organizationId = sourceOrganization
+    ? directChild(sourceOrganization, "id")?.getAttribute("extension")
     : null;
   const organizationName = textOf(
-    custodianOrganization ? directChild(custodianOrganization, "name") : null,
+    sourceOrganization ? directChild(sourceOrganization, "name") : null,
   );
+  const organizationPath = custodianOrganization
+    ? "custodian.assignedCustodian.representedCustodianOrganization"
+    : "representedOrganization";
 
   if (organizationId) {
     facts.push({
@@ -214,7 +234,7 @@ export const parseCdaDocument = async (file: File): Promise<CdaOverview> => {
       kind: "organization",
       label: "Custodian identifier",
       value: organizationId,
-      sourcePath: "custodian.assignedCustodian.representedCustodianOrganization.id.extension",
+      sourcePath: `${organizationPath}.id.extension`,
     });
   }
   if (organizationName) {
@@ -224,9 +244,58 @@ export const parseCdaDocument = async (file: File): Promise<CdaOverview> => {
       kind: "organization",
       label: "Custodian organization",
       value: organizationName,
-      sourcePath: "custodian.assignedCustodian.representedCustodianOrganization.name",
+      sourcePath: `${organizationPath}.name`,
     });
   }
+
+  elements(root, "section")
+    .filter((section) => {
+      const title = textOf(directChild(section, "title"));
+      const code = directChild(section, "code");
+      return /specimen/i.test(`${title} ${code?.getAttribute("displayName") ?? ""}`);
+    })
+    .flatMap((section) => elements(section, "tr"))
+    .forEach((row, index) => {
+      const cells = Array.from(row.children)
+        .filter((cell) => cell.localName === "td")
+        .map((cell) => textOf(cell));
+      if (cells.length < 2) return;
+      const [identifier, specimenType, collected] = cells;
+      const basePath = `structuredBody.section.specimenTable.row[${index}]`;
+      if (identifier) {
+        facts.push({
+          id: `specimen-${index}-identifier`,
+          source: "CDA",
+          kind: "specimen",
+          label: "Specimen identifier",
+          value: identifier,
+          code: identifier,
+          sourcePath: `${basePath}.identifier`,
+        });
+      }
+      if (identifier && specimenType) {
+        facts.push({
+          id: `specimen-${index}-type`,
+          source: "CDA",
+          kind: "specimen",
+          label: "Specimen type",
+          value: specimenType,
+          code: identifier,
+          sourcePath: `${basePath}.type`,
+        });
+      }
+      if (identifier && collected) {
+        facts.push({
+          id: `specimen-${index}-collected`,
+          source: "CDA",
+          kind: "specimen",
+          label: "Collection time",
+          value: collected,
+          code: identifier,
+          sourcePath: `${basePath}.collected`,
+        });
+      }
+    });
 
   const serviceEvent = firstElement(root, "serviceEvent");
   const serviceEventId = serviceEvent
@@ -328,7 +397,10 @@ export const parseCdaDocument = async (file: File): Promise<CdaOverview> => {
 
 export const parsePdfDocument = async (file: File): Promise<PdfOverview> => {
   const { GlobalWorkerOptions, getDocument } = await import("pdfjs-dist");
-  GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url,
+  ).toString();
   const data = new Uint8Array(await file.arrayBuffer());
   const document = await getDocument({ data }).promise;
   const pages: PdfPageText[] = [];
@@ -373,7 +445,10 @@ export const renderPdfPage = async (
   scale = 2,
 ): Promise<RenderedPdfPage> => {
   const { GlobalWorkerOptions, Util, getDocument } = await import("pdfjs-dist");
-  GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url,
+  ).toString();
   const data = new Uint8Array(await file.arrayBuffer());
   const loadingTask = getDocument({ data });
   const pdfDocument = await loadingTask.promise;
@@ -450,7 +525,9 @@ const resourceLabel = (resource: Record<string, unknown>) => {
     const name = asRecord(asArray(resource.name)[0]);
     const given = asArray(name?.given).map(stringValue).filter(Boolean).join(" ");
     const family = stringValue(name?.family);
-    return [given, family].filter(Boolean).join(" ") || `${resourceType} context`;
+    return [given, family].filter(Boolean).join(" ")
+      || stringValue(name?.text)
+      || `${resourceType} context`;
   }
   if (resourceType === "Organization") return stringValue(resource.name) || "Organization context";
   if (resourceType === "ImagingStudy") {
@@ -539,9 +616,110 @@ const includesValue = (candidate: string, expected: string) =>
 const normalized = (value: string) =>
   value
     .toLowerCase()
-    .replace(/[^a-z0-9.%/]+/g, " ")
+    .replace(/[^a-z0-9.%/>=]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const uniqueTerms = (terms: Array<string | null | undefined>) =>
+  Array.from(new Set(terms
+    .filter((term): term is string => Boolean(term?.trim()))
+    .map((term) => term.trim())));
+
+export const referenceRangeText = (resource: Record<string, unknown>) => {
+  const range = asRecord(asArray(resource.referenceRange)[0]);
+  if (!range) return "";
+  const declared = stringValue(range.text);
+  if (declared) return declared;
+  const low = asRecord(range.low);
+  const high = asRecord(range.high);
+  const unit = stringValue(low?.unit || low?.code || high?.unit || high?.code);
+  const lowValue = stringValue(low?.value);
+  const highValue = stringValue(high?.value);
+  if (lowValue && highValue) return `${lowValue} - ${highValue}${unit ? ` ${unit}` : ""}`;
+  if (lowValue) return `>= ${lowValue}${unit ? ` ${unit}` : ""}`;
+  if (highValue) return `<= ${highValue}${unit ? ` ${unit}` : ""}`;
+  return "";
+};
+
+export const interpretationText = (resource: Record<string, unknown>) => {
+  const interpretation = asRecord(asArray(resource.interpretation)[0]);
+  if (!interpretation) return "";
+  return stringValue(interpretation.text)
+    || stringValue(asRecord(asArray(interpretation.coding)[0])?.display)
+    || stringValue(asRecord(asArray(interpretation.coding)[0])?.code);
+};
+
+export const dateEvidenceTerms = (value: string) => {
+  if (!value) return [];
+  const datePart = value.slice(0, 10);
+  const timePart = value.match(/T(\d{2}):(\d{2})/)?.slice(1).join(":") ?? "";
+  return uniqueTerms([
+    value,
+    datePart,
+    formatLongDate(datePart),
+    formatShortDate(datePart),
+    timePart,
+    [formatLongDate(datePart), timePart].filter(Boolean).join(" "),
+    [formatShortDate(datePart), timePart].filter(Boolean).join(" "),
+  ]);
+};
+
+export const findPdfEvidenceForTerms = (
+  pdf: PdfOverview,
+  requiredTerms: string[],
+  optionalTerms: string[] = [],
+): PdfEvidenceMatch | null => {
+  const required = uniqueTerms(requiredTerms).map((term) => ({ raw: term, value: normalized(term) }))
+    .filter((term) => term.value.length > 1);
+  const optional = uniqueTerms(optionalTerms).map((term) => ({ raw: term, value: normalized(term) }))
+    .filter((term) => term.value.length > 1);
+  if (required.length === 0) return null;
+
+  const scored: Array<PdfEvidenceMatch & { score: number }> = [];
+  pdf.pages.forEach((page) => {
+    page.lines.forEach((line, index) => {
+      const windowLines = page.lines.slice(Math.max(0, index - 1), index + 3);
+      const window = windowLines.join(" ");
+      const haystack = normalized(window);
+      const matchedRequired = required.filter((term) => haystack.includes(term.value));
+      if (matchedRequired.length === 0) return;
+      const matchedOptional = optional.filter((term) => haystack.includes(term.value));
+      scored.push({
+        pageNumber: page.pageNumber,
+        text: window,
+        matchTerms: uniqueTerms([
+          ...matchedRequired.map((term) => term.raw),
+          ...matchedOptional.map((term) => term.raw),
+        ]),
+        score: (matchedRequired.length * 10) + (matchedOptional.length * 3),
+      });
+    });
+  });
+
+  const best = scored.sort((left, right) => right.score - left.score)[0];
+  if (!best) return null;
+  return {
+    pageNumber: best.pageNumber,
+    text: best.text,
+    matchTerms: best.matchTerms,
+  };
+};
+
+const addPdfMapping = (
+  mappings: CapabilityMapping[],
+  mapping: Omit<CapabilityMapping, "source" | "sourcePage" | "sourcePath" | "sourceValue" | "matchTerms">,
+  evidence: PdfEvidenceMatch | null,
+) => {
+  if (!evidence) return;
+  mappings.push({
+    ...mapping,
+    source: "PDF",
+    sourceValue: evidence.text,
+    sourcePath: `PDF page ${evidence.pageNumber}`,
+    sourcePage: evidence.pageNumber,
+    matchTerms: evidence.matchTerms,
+  });
+};
 
 const evidenceTerms = (fact: ClinicalSourceFact) => {
   const terms = [fact.code, fact.value, fact.label]
@@ -556,30 +734,8 @@ const evidenceTerms = (fact: ClinicalSourceFact) => {
   return Array.from(new Set(terms));
 };
 
-const findPdfEvidence = (fact: ClinicalSourceFact, pdf: PdfOverview) => {
-  const terms = evidenceTerms(fact);
-  const scored: Array<{ pageNumber: number; text: string; score: number }> = [];
-
-  pdf.pages.forEach((page) => {
-    page.lines.forEach((line, index) => {
-      const window = page.lines.slice(Math.max(0, index - 1), index + 3).join(" ");
-      const haystack = normalized(window);
-      let score = 0;
-
-      terms.forEach((term, termIndex) => {
-        if (haystack.includes(normalized(term))) score += termIndex === 0 ? 5 : 3;
-      });
-
-      if (fact.kind === "observation" && fact.code && haystack.includes(normalized(fact.code))) {
-        score += 4;
-      }
-
-      if (score >= 5) scored.push({ pageNumber: page.pageNumber, text: window, score });
-    });
-  });
-
-  return scored.sort((left, right) => right.score - left.score)[0] ?? null;
-};
+const findPdfEvidence = (fact: ClinicalSourceFact, pdf: PdfOverview) =>
+  findPdfEvidenceForTerms(pdf, evidenceTerms(fact), [fact.label, fact.value]);
 
 export const buildCapabilityMappings = (
   cda: CdaOverview | null,
@@ -592,6 +748,7 @@ export const buildCapabilityMappings = (
   const practitioner = resources.find((item) => item.resourceType === "Practitioner");
   const organization = resources.find((item) => item.resourceType === "Organization");
   const observations = resources.filter((item) => item.resourceType === "Observation");
+  const specimens = resources.filter((item) => item.resourceType === "Specimen");
   const conditions = resources.filter((item) => item.resourceType === "Condition");
   const report = resources.find((item) => item.resourceType === "DiagnosticReport");
   const imagingStudy = resources.find((item) => item.resourceType === "ImagingStudy");
@@ -638,6 +795,24 @@ export const buildCapabilityMappings = (
         } else {
           targetPath = "Organization.name";
           targetValue = stringValue(organization.resource.name);
+        }
+      }
+    } else if (fact.kind === "specimen") {
+      target = specimens.find((item) => {
+        const identifier = asRecord(asArray(item.resource.identifier)[0]);
+        return stringValue(identifier?.value) === fact.code;
+      });
+      if (target) {
+        if (fact.id.endsWith("-identifier")) {
+          const identifier = asRecord(asArray(target.resource.identifier)[0]);
+          targetPath = "Specimen.identifier[0].value";
+          targetValue = stringValue(identifier?.value);
+        } else if (fact.id.endsWith("-type")) {
+          targetPath = "Specimen.type.text";
+          targetValue = stringValue(asRecord(target.resource.type)?.text);
+        } else {
+          targetPath = "Specimen.collection.collectedDateTime";
+          targetValue = stringValue(asRecord(target.resource.collection)?.collectedDateTime);
         }
       }
     } else if (fact.kind === "observation") {
@@ -715,20 +890,210 @@ export const buildCapabilityMappings = (
           targetValue: targetValue || "Review generated output",
           status,
           sourcePage: pdfEvidence.pageNumber,
-          matchTerms: evidenceTerms(fact),
+          matchTerms: pdfEvidence.matchTerms,
         });
       }
     }
   });
 
+  if (pdf) {
+    const mapPdfField = (
+      id: string,
+      sourceLabel: string,
+      target: FhirResourceView,
+      targetPath: string,
+      targetValue: string,
+      requiredTerms: string[],
+      optionalTerms: string[] = [],
+    ) => addPdfMapping(
+      mappings,
+      {
+        id,
+        sourceLabel,
+        targetResource: `${target.resourceType}/${target.id}`,
+        targetPath,
+        targetValue: targetValue || "Review generated output",
+        status: targetValue ? "Mapped" : "Review",
+      },
+      findPdfEvidenceForTerms(pdf, requiredTerms, optionalTerms),
+    );
+
+    if (patient) {
+      const identifier = asRecord(asArray(patient.resource.identifier)[0]);
+      const patientId = stringValue(identifier?.value);
+      const birthDate = stringValue(patient.resource.birthDate);
+      mapPdfField(
+        "map-pdf-patient-id",
+        "Patient identifier",
+        patient,
+        "Patient.identifier[0].value",
+        patientId,
+        [patientId],
+        ["MRN"],
+      );
+      mapPdfField(
+        "map-pdf-patient-name",
+        "Patient name",
+        patient,
+        "Patient.name[0]",
+        patient.label,
+        [patient.label],
+        patient.label.split(/\s+/),
+      );
+      mapPdfField(
+        "map-pdf-patient-birth",
+        "Date of birth",
+        patient,
+        "Patient.birthDate",
+        birthDate,
+        dateEvidenceTerms(birthDate),
+        ["DOB"],
+      );
+    }
+
+    if (organization) {
+      const organizationName = stringValue(organization.resource.name);
+      mapPdfField(
+        "map-pdf-organization-name",
+        "Reporting organisation",
+        organization,
+        "Organization.name",
+        organizationName,
+        [organizationName.replace(/\s+-\s+Synthetic$/i, "")],
+        [organizationName],
+      );
+    }
+
+    if (practitioner) {
+      const practitionerName = practitioner.label.replace(/^Dr\s+/i, "").trim();
+      mapPdfField(
+        "map-pdf-practitioner-name",
+        "Pathologist name",
+        practitioner,
+        "Practitioner.name[0]",
+        practitioner.label,
+        [practitionerName],
+        uniqueTerms([practitioner.label, ...practitionerName.split(/\s+/)]),
+      );
+    }
+
+    specimens.forEach((specimen) => {
+      const identifier = asRecord(asArray(specimen.resource.identifier)[0]);
+      const specimenId = stringValue(identifier?.value);
+      const specimenType = stringValue(asRecord(specimen.resource.type)?.text);
+      const collected = stringValue(asRecord(specimen.resource.collection)?.collectedDateTime);
+      mapPdfField(
+        `map-pdf-specimen-${specimen.id}-identifier`,
+        "Specimen identifier",
+        specimen,
+        "Specimen.identifier[0].value",
+        specimenId,
+        [specimenId],
+        ["SPECIMENS", specimenType],
+      );
+      mapPdfField(
+        `map-pdf-specimen-${specimen.id}-type`,
+        "Specimen type",
+        specimen,
+        "Specimen.type.text",
+        specimenType,
+        [specimenId],
+        [specimenType],
+      );
+      if (!mappings.some((mapping) =>
+        mapping.source === "PDF"
+        && mapping.targetResource === `Specimen/${specimen.id}`
+        && mapping.targetPath === "Specimen.collection.collectedDateTime")) {
+        mapPdfField(
+          `map-pdf-specimen-${specimen.id}-collected`,
+          "Collection time",
+          specimen,
+          "Specimen.collection.collectedDateTime",
+          collected,
+          dateEvidenceTerms(collected),
+          ["COLLECTED"],
+        );
+      }
+    });
+
+    observations.forEach((observation) => {
+      const coding = codingFor(observation.resource);
+      const testName = stringValue(asRecord(observation.resource.code)?.text)
+        || coding.display
+        || coding.code;
+      const quantity = asRecord(observation.resource.valueQuantity);
+      const value = stringValue(quantity?.value);
+      const unit = stringValue(quantity?.unit || quantity?.code);
+      const quantityText = [value, unit].filter(Boolean).join(" ");
+      const range = referenceRangeText(observation.resource);
+      const interpretation = interpretationText(observation.resource);
+      const evidence = findPdfEvidenceForTerms(
+        pdf,
+        [testName],
+        [value, unit, range, interpretation],
+      );
+      if (!evidence) return;
+      const targetResource = `Observation/${observation.id}`;
+      const shared = {
+        source: "PDF" as const,
+        sourcePage: evidence.pageNumber,
+        sourcePath: `PDF page ${evidence.pageNumber} · pathology result row`,
+        sourceValue: evidence.text,
+        targetResource,
+        status: "Mapped" as const,
+      };
+      mappings.push(
+        {
+          ...shared,
+          id: `map-pdf-observation-${observation.id}-code`,
+          sourceLabel: "Pathology test",
+          targetPath: "Observation.code",
+          targetValue: testName,
+          matchTerms: uniqueTerms([testName]),
+        },
+        {
+          ...shared,
+          id: `map-pdf-observation-${observation.id}-value`,
+          sourceLabel: "Result value and unit",
+          targetPath: "Observation.valueQuantity",
+          targetValue: quantityText,
+          matchTerms: uniqueTerms([testName, value, unit]),
+        },
+      );
+      if (range) {
+        mappings.push({
+          ...shared,
+          id: `map-pdf-observation-${observation.id}-range`,
+          sourceLabel: "Reference range",
+          targetPath: "Observation.referenceRange",
+          targetValue: range,
+          matchTerms: uniqueTerms([testName, range]),
+        });
+      }
+      if (interpretation) {
+        mappings.push({
+          ...shared,
+          id: `map-pdf-observation-${observation.id}-interpretation`,
+          sourceLabel: "Result flag",
+          targetPath: "Observation.interpretation",
+          targetValue: interpretation,
+          matchTerms: uniqueTerms([testName, interpretation]),
+        });
+      }
+    });
+  }
+
   if (pdf && report) {
-    const conclusion = stringValue(report.resource.conclusion);
+    const conclusionValue = report.resource.conclusion;
+    const conclusion = Array.isArray(conclusionValue)
+      ? conclusionValue.map(stringValue).filter(Boolean).join(" ")
+      : stringValue(conclusionValue);
     const normalizedConclusion = normalized(conclusion);
     const narrativePage = pdf.pages.find(
       (page) => normalizedConclusion && normalized(page.text).includes(normalizedConclusion),
-    ) ?? pdf.pages.find((page) => /impression|conclusion/i.test(page.text));
+    ) ?? pdf.pages.find((page) => /impression|conclusion|interpretation/i.test(page.text));
     const impressionIndex = narrativePage?.lines.findIndex((line) =>
-      /impression|conclusion/i.test(line),
+      /impression|conclusion|interpretation/i.test(line),
     ) ?? -1;
     const narrative = narrativePage
       ? impressionIndex >= 0
@@ -748,8 +1113,61 @@ export const buildCapabilityMappings = (
       targetValue: conclusion || "No conclusion generated",
       status: conclusion ? "Mapped" : "Review",
       sourcePage: narrativePage?.pageNumber ?? 1,
-      matchTerms: ["IMPRESSION", conclusion].filter(Boolean),
+      matchTerms: uniqueTerms([
+        "PATHOLOGIST INTERPRETATION",
+        ...(narrative ? narrative.split(/(?<=[.!?])\s+/) : []),
+      ]),
     });
+
+    if (organization) {
+      const organizationName = stringValue(organization.resource.name);
+      const performerReferences = asArray(report.resource.performer)
+        .map(asRecord)
+        .map((reference) => stringValue(reference?.reference))
+        .filter(Boolean)
+        .join(", ");
+      addPdfMapping(
+        mappings,
+        {
+          id: "map-pdf-diagnostic-report-performer",
+          sourceLabel: "Reporting organisation",
+          targetResource: `DiagnosticReport/${report.id}`,
+          targetPath: "DiagnosticReport.performer",
+          targetValue: performerReferences || "Review generated output",
+          status: performerReferences ? "Mapped" : "Review",
+        },
+        findPdfEvidenceForTerms(
+          pdf,
+          [organizationName.replace(/\s+-\s+Synthetic$/i, "")],
+          [organizationName],
+        ),
+      );
+    }
+
+    if (practitioner) {
+      const practitionerName = practitioner.label.replace(/^Dr\s+/i, "").trim();
+      const interpreterReferences = asArray(report.resource.resultsInterpreter)
+        .map(asRecord)
+        .map((reference) => stringValue(reference?.reference))
+        .filter(Boolean)
+        .join(", ");
+      addPdfMapping(
+        mappings,
+        {
+          id: "map-pdf-diagnostic-report-interpreter",
+          sourceLabel: "Results interpreter",
+          targetResource: `DiagnosticReport/${report.id}`,
+          targetPath: "DiagnosticReport.resultsInterpreter",
+          targetValue: interpreterReferences || "Review generated output",
+          status: interpreterReferences ? "Mapped" : "Review",
+        },
+        findPdfEvidenceForTerms(
+          pdf,
+          [practitionerName],
+          ["Pathologist", "Electronically verified"],
+        ),
+      );
+    }
 
     const pdfLines = pdf.pages.flatMap((page) =>
       page.lines.map((line) => ({ line, pageNumber: page.pageNumber })),
@@ -852,5 +1270,14 @@ export const buildCapabilityMappings = (
     }
   }
 
-  return mappings;
+  const deduplicated = new Map<string, CapabilityMapping>();
+  mappings.forEach((mapping) => {
+    if (mapping.targetResource === "No matching resource") return;
+    const key = [mapping.source, mapping.targetResource, mapping.targetPath].join("|");
+    const current = deduplicated.get(key);
+    if (!current || mapping.matchTerms.length > current.matchTerms.length) {
+      deduplicated.set(key, mapping);
+    }
+  });
+  return Array.from(deduplicated.values());
 };

@@ -74,6 +74,9 @@ jobs:
       - name: Test clinical workflow
         run: npm run test:workflow
 
+      - name: Test source evidence tracing
+        run: npm run test:frontend
+
       - name: Synthesize CDK
         env:
           CDK_STACK_ID: ${{ steps.target.outputs.stack_id }}

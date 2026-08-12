@@ -1848,10 +1848,11 @@ const HighlightedLine = ({ text, terms }: { text: string; terms: string[] }) => 
 };
 
 const targetField = (mapping: CapabilityMapping) => mapping.targetPath
-    .split(".")
-    .slice(-1)[0]
-    ?.replace(/\[\d+\]/g, "")
-    .trim() ?? "";
+  .split(".")
+  .filter(Boolean)
+  .slice(-1)[0]
+  ?.replace(/\[\d+\]/g, "")
+  .trim() ?? "";
 
 const traceColors = [
   "#8b7bff",
@@ -1894,11 +1895,12 @@ const JsonTrace = ({
             type="button"
             className={`${mapping ? "mapped" : ""} ${active ? "active" : ""}`.trim()}
             disabled={!mapping}
-            onClick={() => mapping && onHoverMapping(mapping)}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (mapping) onHoverMapping(mapping);
+            }}
             onMouseEnter={() => mapping && onHoverMapping(mapping)}
-            onMouseLeave={() => mapping && onHoverMapping(null)}
             onFocus={() => mapping && onHoverMapping(mapping)}
-            onBlur={() => mapping && onHoverMapping(null)}
             title={mapping ? `Show ${mapping.sourceLabel} in the source document` : undefined}
             key={`${line}-${index}`}
           >
@@ -1913,7 +1915,7 @@ const JsonTrace = ({
 
 const normalizeEvidenceText = (value: string) => value
   .toLowerCase()
-  .replace(/[^a-z0-9.%/]+/g, " ")
+  .replace(/[^a-z0-9.%/>=]+/g, " ")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -1955,16 +1957,35 @@ const PdfCanvasPreview = ({
 
   const terms = Array.from(new Set(mappings
     .filter((mapping) => mapping.source === "PDF" && (mapping.sourcePage ?? 1) === pageNumber)
-    .flatMap((mapping) => mapping.targetPath.endsWith("valueQuantity")
-      ? mapping.matchTerms.slice(0, 2)
-      : mapping.matchTerms)
+    .flatMap((mapping) => mapping.matchTerms)
     .map(normalizeEvidenceText)
     .filter((term) => term.length > 2)));
-  const highlightedBoxes = rendered?.textBoxes.filter((box) => {
+  const candidateBoxes = rendered?.textBoxes.filter((box) => {
     const text = normalizeEvidenceText(box.text);
-    if (text.length < 3) return false;
+    if (text.length < 1) return false;
     return terms.some((term) => text.includes(term) || term.includes(text));
   }) ?? [];
+  const anchorTerms = Array.from(new Set(mappings
+    .filter((mapping) => mapping.source === "PDF" && (mapping.sourcePage ?? 1) === pageNumber)
+    .map((mapping) => normalizeEvidenceText(mapping.matchTerms[0] ?? ""))
+    .filter((term) => term.length > 2)));
+  const anchorBoxes = rendered?.textBoxes.filter((box) => {
+    const text = normalizeEvidenceText(box.text);
+    return anchorTerms.some((term) => text.includes(term) || term.includes(text));
+  }) ?? [];
+  const anchorClusters = anchorBoxes.map((anchor) => ({
+    anchor,
+    boxes: candidateBoxes.filter((box) => {
+      const boxCenter = box.top + (box.height / 2);
+      const anchorCenter = anchor.top + (anchor.height / 2);
+      return Math.abs(boxCenter - anchorCenter) <= Math.max(box.height, anchor.height) * 6;
+    }),
+  }));
+  const bestAnchorCluster = anchorClusters.sort((left, right) =>
+    right.boxes.length - left.boxes.length || left.anchor.top - right.anchor.top)[0];
+  const highlightedBoxes = bestAnchorCluster?.boxes.length
+    ? bestAnchorCluster.boxes
+    : candidateBoxes;
 
   useEffect(() => {
     if (highlightedBoxes.length === 0) return;
@@ -2009,7 +2030,11 @@ const PdfCanvasPreview = ({
       {rendered ? (
         <div className="pdf-page-meta">
           <span>Page {rendered.pageNumber} of {rendered.pageCount}</span>
-          <strong>{mappings.length > 0 ? `${highlightedBoxes.length} evidence ${highlightedBoxes.length === 1 ? "match" : "matches"}` : "No linked evidence"}</strong>
+          <strong>{mappings.length > 0
+            ? highlightedBoxes.length > 0
+              ? `${highlightedBoxes.length} source ${highlightedBoxes.length === 1 ? "highlight" : "highlights"}`
+              : "Source found · highlight unavailable"
+            : "Select a traced FHIR field"}</strong>
         </div>
       ) : null}
     </div>
@@ -2144,11 +2169,22 @@ const CapabilityOverviewPage = ({
   const selectedTarget = selectedResource
     ? `${selectedResource.resourceType}/${selectedResource.id}`
     : null;
+  const allResourceMappings = mappings.filter(
+    (mapping) => mapping.targetResource === selectedTarget,
+  );
   const resourceMappings = sourceMappings.filter(
     (mapping) => mapping.targetResource === selectedTarget,
   );
   const highlightedMappings = activeMapping ? [activeMapping] : resourceMappings;
   const selectedResourceLinked = resourceMappings.length > 0;
+  const availableSources = Array.from(new Set(allResourceMappings.map((mapping) => mapping.source)));
+  const resourceTraceSummary = selectedResource
+    ? highlightedMappings.length > 0
+      ? `${highlightedMappings.length} field${highlightedMappings.length === 1 ? "" : "s"} traced to ${sourceView.toUpperCase()}`
+      : availableSources.length > 0
+        ? `Evidence is in ${availableSources.join(" + ")}`
+        : "Generated FHIR structure · no literal source text"
+    : "Select a FHIR resource to trace its source";
   const isRunning = evaluation?.status === "RUNNING";
   const isComplete = evaluation?.status === "COMPLETED";
   const hasValidCandidate = Boolean(
@@ -2164,13 +2200,28 @@ const CapabilityOverviewPage = ({
     "No valid FHIR Bundle was produced. Generate again.";
   const sourceReady = Boolean(cdaFile && pdfFile && cdaOverview && pdfOverview && !cdaError && !pdfError);
 
+  const choosePreferredSource = (resourceKey: string) => {
+    const resource = parsedCandidate.resources.find((item) => item.key === resourceKey);
+    if (!resource) return;
+    const target = `${resource.resourceType}/${resource.id}`;
+    const targetMappings = mappings.filter((mapping) => mapping.targetResource === target);
+    const hasPdfEvidence = targetMappings.some((mapping) => mapping.source === "PDF");
+    const hasCdaEvidence = targetMappings.some((mapping) => mapping.source === "CDA");
+    if (hasPdfEvidence && !hasCdaEvidence) setSourceView("pdf");
+    if (hasCdaEvidence && !hasPdfEvidence) setSourceView("cda");
+  };
+
   const hoverMapping = (mapping: CapabilityMapping | null) => {
+    if (mapping && mapping.source.toLowerCase() !== sourceView) {
+      setSourceView(mapping.source.toLowerCase() as "cda" | "pdf");
+    }
     setSelectedMappingId(mapping?.id ?? null);
   };
 
   const traceResource = (resourceKey: string) => {
     setSelectedResourceKey(resourceKey);
     setSelectedMappingId(null);
+    choosePreferredSource(resourceKey);
   };
 
   const selectSourceView = (view: "cda" | "pdf") => {
@@ -2256,7 +2307,7 @@ const CapabilityOverviewPage = ({
           <header>
             <div><span className="eyebrow">Source document</span><h2>{sourceView === "cda" ? "CDA document" : "PDF report"}</h2></div>
             <div className="source-header-actions">
-              <span className={`trace-count ${highlightedMappings.length > 0 ? "active" : ""}`}><Link2 aria-hidden="true" />{highlightedMappings.length} {sourceView.toUpperCase()} {highlightedMappings.length === 1 ? "link" : "links"}</span>
+              <span className={`trace-count ${highlightedMappings.length > 0 ? "active" : ""}`}><Link2 aria-hidden="true" />{highlightedMappings.length} source {highlightedMappings.length === 1 ? "field" : "fields"}</span>
               <div className="source-document-tabs" role="tablist" aria-label="Source document type">
                 <button type="button" role="tab" aria-selected={sourceView === "cda"} className={sourceView === "cda" ? "active" : ""} onClick={() => selectSourceView("cda")}>CDA XML</button>
                 <button type="button" role="tab" aria-selected={sourceView === "pdf"} className={sourceView === "pdf" ? "active" : ""} onClick={() => selectSourceView("pdf")}>PDF</button>
@@ -2290,12 +2341,15 @@ const CapabilityOverviewPage = ({
             <>
               <div className={`fhir-trace-status ${activeMapping ? "field-active" : ""}`}>
                 <span>{activeMapping ? activeMapping.targetPath : selectedResource ? `${selectedResource.resourceType}/${selectedResource.id}` : "Resource trace"}</span>
-                <strong>{highlightedMappings.length > 0 ? `${highlightedMappings.length} ${sourceView.toUpperCase()} ${highlightedMappings.length === 1 ? "field" : "fields"}` : `No ${sourceView.toUpperCase()} evidence`}</strong>
+                <strong>{resourceTraceSummary}</strong>
               </div>
               <div className="fhir-resource-stream" aria-label="Complete generated FHIR bundle">
                 {parsedCandidate.resources.map((resource, resourceIndex) => {
                   const target = `${resource.resourceType}/${resource.id}`;
                   const linkedMappings = sourceMappings.filter((mapping) => mapping.targetResource === target);
+                  const cardSources = Array.from(new Set(mappings
+                    .filter((mapping) => mapping.targetResource === target)
+                    .map((mapping) => mapping.source)));
                   const isActive = selectedResource?.key === resource.key;
                   return (
                     <article
@@ -2303,16 +2357,21 @@ const CapabilityOverviewPage = ({
                       style={traceStyle(resourceIndex)}
                       tabIndex={0}
                       onMouseEnter={() => traceResource(resource.key)}
+                      onClick={() => traceResource(resource.key)}
                       onFocus={(event) => {
                         if (event.target === event.currentTarget) traceResource(resource.key);
                       }}
-                      title={linkedMappings.length > 0 ? `Trace ${linkedMappings.length} fields to ${sourceView.toUpperCase()}` : `No direct ${sourceView.toUpperCase()} evidence`}
+                      title={linkedMappings.length > 0
+                        ? `Trace ${linkedMappings.length} fields to ${sourceView.toUpperCase()}`
+                        : cardSources.length > 0
+                          ? `Evidence is available in ${cardSources.join(" and ")}`
+                          : "This resource contains generated FHIR structure rather than literal source text"}
                       key={resource.key}
                     >
                       <header>
                         <span className="resource-icon">{resource.resourceType.slice(0, 1)}</span>
                         <span className="resource-card-title"><strong>{resource.resourceType}/{resource.id}</strong><small>{resource.label}</small></span>
-                        <span className={linkedMappings.length > 0 ? "resource-link-state linked" : "resource-link-state unlinked"}>{linkedMappings.length > 0 ? <Link2 aria-hidden="true" /> : <Unlink2 aria-hidden="true" />}{linkedMappings.length > 0 ? `${linkedMappings.length} ${sourceView.toUpperCase()}` : `No ${sourceView.toUpperCase()}`}</span>
+                        <span className={linkedMappings.length > 0 ? "resource-link-state linked" : "resource-link-state unlinked"}>{cardSources.length > 0 ? <Link2 aria-hidden="true" /> : <Boxes aria-hidden="true" />}{linkedMappings.length > 0 ? `${linkedMappings.length} ${sourceView.toUpperCase()}` : cardSources.length > 0 ? cardSources.join(" + ") : "FHIR structure"}</span>
                       </header>
                       <JsonTrace
                         value={resource.resource}
@@ -2370,13 +2429,18 @@ const readInitialView = (): ViewId => {
     : "overview";
 };
 
+const readInitialCapabilityRunId = () => {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("run");
+};
+
 function App() {
   const [view, setView] = useState<ViewId>(readInitialView);
   const [evaluations, setEvaluations] = useState<DashboardEvaluation[]>([]);
   const [selectedId, setSelectedId] = useState(demoEvaluation.id);
   const [uploads, setUploads] = useState<UploadState>(defaultUploads);
   const [capabilityInputs, setCapabilityInputs] = useState<CapabilityInputState>({ cda: [], pdf: [] });
-  const [capabilityRunId, setCapabilityRunId] = useState<string | null>(null);
+  const [capabilityRunId, setCapabilityRunId] = useState<string | null>(readInitialCapabilityRunId);
   const [reuseContext, setReuseContext] = useState<{
     evaluationId: string;
   } | null>(null);
@@ -2678,7 +2742,6 @@ function App() {
         cda: sample.clinicalBundle.filter((file) => /\.(?:xml|cda|ccda)$/i.test(file.name)).slice(0, 1),
         pdf: sample.clinicalBundle.filter((file) => /\.pdf$/i.test(file.name)).slice(0, 1),
       });
-      setCapabilityRunId(null);
       setToast("Synthetic CDA and PDF loaded. You can inspect both before generation.");
     } catch (error) {
       setToast(`Could not load the capability samples: ${String(error)}`);

@@ -4712,12 +4712,12 @@ button.table-row:hover {
   position: absolute;
   min-width: 3px;
   min-height: 5px;
-  border: 0;
-  border-radius: 1px;
-  background: color-mix(in srgb, var(--trace-color) 42%, #fff);
-  box-shadow: none;
+  border: 1px solid color-mix(in srgb, var(--trace-color) 86%, #111827);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--trace-color) 58%, #fff);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.74), 0 0 8px color-mix(in srgb, var(--trace-color) 42%, transparent);
   mix-blend-mode: multiply;
-  transform: translateY(12%) scaleY(0.72);
+  transform: translateY(4%) scaleY(1.18);
   transform-origin: center;
 }
 
